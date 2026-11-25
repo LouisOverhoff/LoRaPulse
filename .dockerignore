@@ -1,0 +1,42 @@
+# Version control
+.git
+.gitignore
+
+# Secrets, certificates, and environment files (NEVER include in build context)
+.env
+.env.*
+*.pem
+*.key
+*.crt
+secrets/
+
+# Dependencies and local build outputs
+node_modules
+**/node_modules
+dist
+**/dist
+build
+.vite
+**/.vite
+*.tsbuildinfo
+
+# Local database volumes and runtime artifacts
+postgres-data
+mosquitto-data
+*.sqlite
+*.db
+
+# Logs, tests, docs, and deployment configs not needed inside build context
+logs
+*.log
+coverage
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+docs
+deploy
+docker-compose*.yml
+Dockerfile
+AGENTS.md
+CHANGELOG.md

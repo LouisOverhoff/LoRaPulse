@@ -1,0 +1,16 @@
+[Unit]
+Description=LoRaPulse Restricted Host Reboot Socket (SUPER_ADMIN Stage-3 Action)
+Documentation=https://github.com/lorapulse/lorapulse
+
+[Socket]
+ListenStream=/run/lorapulse-reboot/reboot.sock
+Accept=yes
+DirectoryMode=0750
+SocketMode=0660
+SocketUser=root
+# UID/GID 1000 matches the unprivileged `node` user inside the lorapulse container
+SocketGroup=1000
+MaxConnections=2
+
+[Install]
+WantedBy=sockets.target

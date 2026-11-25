@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "paths": {
+      "@lorapulse/shared": ["../packages/shared/dist/index.d.ts"]
+    },
+    "noEmit": true
+  },
+  "include": ["src"]
+}

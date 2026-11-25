@@ -1,0 +1,34 @@
+# ==============================================================================
+# LoRaPulse v0.0.1 – Optional Traefik v2/v3 Overlay
+# Usage:
+#   Set COMPOSE_FILE=docker-compose.yml:docker-compose.traefik.yml in .env
+#   or run: docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d
+# ==============================================================================
+
+services:
+  lorapulse:
+    ports: !reset []
+    networks:
+      - lorapulse-internal
+      - lorapulse-egress
+      - traefik-proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-proxy}"
+      - "traefik.http.routers.lorapulse.rule=Host(`${APP_DOMAIN:?APP_DOMAIN must be set in .env for Traefik}`)"
+      - "traefik.http.routers.lorapulse.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.lorapulse.tls=true"
+      - "traefik.http.routers.lorapulse.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}"
+      - "traefik.http.routers.lorapulse.middlewares=lorapulse-sec-headers@docker"
+      - "traefik.http.services.lorapulse.loadbalancer.server.port=8080"
+      - "traefik.http.middlewares.lorapulse-sec-headers.headers.stsSeconds=63072000"
+      - "traefik.http.middlewares.lorapulse-sec-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.lorapulse-sec-headers.headers.stsPreload=true"
+      - "traefik.http.middlewares.lorapulse-sec-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.lorapulse-sec-headers.headers.frameDeny=true"
+      - "traefik.http.middlewares.lorapulse-sec-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+
+networks:
+  traefik-proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK:-proxy}

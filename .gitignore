@@ -1,0 +1,27 @@
+# Sensible Zugangsdaten & lokale Umgebungsdateien (NIEMALS committen!)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+
+# Abhängigkeiten & Build-Artefakte
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# Datenbank-Volumes & lokale Testdaten
+postgres-data/
+mosquitto-data/
+*.sqlite
+*.db
+
+# Logs & Betriebssystem
+logs/
+*.log
+.DS_Store
+Thumbs.db

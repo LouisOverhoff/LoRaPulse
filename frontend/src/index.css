@@ -1,0 +1,243 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+:root,
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-canvas: #0b1117;
+  --bg-surface: #121b24;
+  --bg-elevated: #182430;
+  --bg-hover: #1f2e3d;
+  --border-subtle: #223243;
+  --border-strong: #31475e;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent: #10b981;
+  --accent-hover: #059669;
+  --accent-soft: rgba(16, 185, 129, 0.14);
+  --accent-border: rgba(16, 185, 129, 0.38);
+  --status-ok: #10b981;
+  --status-warn: #f59e0b;
+  --status-alarm: #ef4444;
+  --status-offline: #64748b;
+  --status-new: #38bdf8;
+  --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg-canvas: #f3f6f9;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f8fafc;
+  --bg-hover: #edf2f7;
+  --border-subtle: #dbe3ec;
+  --border-strong: #cbd5e1;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --accent: #059669;
+  --accent-hover: #047857;
+  --accent-soft: rgba(5, 150, 105, 0.11);
+  --accent-border: rgba(5, 150, 105, 0.35);
+  --status-ok: #059669;
+  --status-warn: #d97706;
+  --status-alarm: #dc2626;
+  --status-offline: #64748b;
+  --status-new: #0284c7;
+  --shadow-card: 0 4px 16px rgba(15, 23, 42, 0.06);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.lp-surface {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-card);
+}
+
+.lp-elevated {
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+}
+
+.lp-input {
+  width: 100%;
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5rem;
+  padding: 0.525rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.lp-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.lp-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  background-color: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 0.875rem;
+  border-radius: 0.5rem;
+  padding: 0.525rem 0.95rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 140ms ease, opacity 140ms ease;
+}
+
+.lp-btn-primary:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+}
+
+.lp-btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.lp-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+  font-weight: 500;
+  font-size: 0.85rem;
+  border-radius: 0.5rem;
+  padding: 0.475rem 0.85rem;
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, opacity 140ms ease;
+}
+
+.lp-btn-secondary:hover:not(:disabled) {
+  background-color: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.lp-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.lp-btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  background-color: rgba(239, 68, 68, 0.14);
+  color: var(--status-alarm);
+  font-weight: 600;
+  font-size: 0.85rem;
+  border-radius: 0.5rem;
+  padding: 0.475rem 0.85rem;
+  border: 1px solid rgba(239, 68, 68, 0.36);
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+.lp-btn-danger:hover:not(:disabled) {
+  background-color: rgba(239, 68, 68, 0.24);
+}
+
+.lp-btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@keyframes lpPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(1.18);
+  }
+}
+
+.lp-led-pulse {
+  animation: lpPulse 2s ease-in-out infinite;
+}
+
+/* Custom Leaflet status pill pins (Zero-Emoji) */
+.lp-leaflet-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
+.lp-pin-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  background-color: #0f172a;
+  color: #f8fafc;
+  border: 2px solid #10b981;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.42);
+  transform: translate(-50%, -50%);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+html[data-theme="light"] .lp-pin-pill {
+  background-color: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.22);
+}
+
+.lp-pin-pill:hover,
+.lp-pin-pill.is-selected {
+  transform: translate(-50%, -50%) scale(1.09);
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.32), 0 6px 16px rgba(0, 0, 0, 0.45);
+  z-index: 900;
+}
+
+.lp-pin-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+.leaflet-container {
+  font-family: inherit;
+  background-color: var(--bg-elevated);
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}

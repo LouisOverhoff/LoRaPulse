@@ -1,0 +1,35 @@
+# ==============================================================================
+# LoRaPulse v0.0.1 – Hardened Caddy v2 Reverse Proxy Configuration
+# Automatic Let's Encrypt / ZeroSSL TLS 1.3 + SSE Live-Stream Support
+# ==============================================================================
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(self), camera=(), microphone=()"
+		-Server
+	}
+
+	request_body {
+		max_size 2MB
+	}
+
+	# Ensure unbuffered real-time delivery for Server-Sent Events (SSE)
+	@sse {
+		path /api/events* /api/stream*
+	}
+	handle @sse {
+		reverse_proxy lorapulse:8080 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy lorapulse:8080
+	}
+}

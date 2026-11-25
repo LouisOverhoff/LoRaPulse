@@ -1,0 +1,49 @@
+# ==============================================================================
+# LoRaPulse v0.0.1 – Optional Standalone Caddy Auto-HTTPS Overlay
+# Usage (for hosts without an existing reverse proxy):
+#   Set COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml in .env
+#   or run: docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+# ==============================================================================
+
+services:
+  lorapulse:
+    ports: !reset []
+    networks:
+      - lorapulse-internal
+      - lorapulse-egress
+      - lorapulse-caddy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      lorapulse:
+        condition: service_healthy
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN must be set in .env for Caddy Auto-HTTPS}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - lorapulse-caddy-data:/data
+      - lorapulse-caddy-config:/config
+    networks:
+      - lorapulse-caddy
+
+volumes:
+  lorapulse-caddy-data:
+    name: lorapulse-caddy-data
+  lorapulse-caddy-config:
+    name: lorapulse-caddy-config
+
+networks:
+  lorapulse-caddy:
+    driver: bridge

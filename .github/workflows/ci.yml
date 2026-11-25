@@ -1,0 +1,33 @@
+name: LoRaPulse CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Typecheck, Build & E2E Security Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript checks across all workspaces
+        run: npm run typecheck
+
+      - name: Build Shared, Frontend PWA, Backend & Simulator
+        run: npm run build
+
+      - name: Run End-to-End Integration & RBAC Security Tests
+        run: npm test

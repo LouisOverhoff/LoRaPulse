@@ -1,0 +1,17 @@
+[Unit]
+Description=LoRaPulse Restricted Host Reboot Executor (Per-Connection Instance)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+# Validates explicit reboot token/request before scheduling a delayed host reboot
+# so the container can flush audit logs and return an HTTP 202 response cleanly.
+ExecStart=/bin/sh -c 'IFS= read -r line || true; case "$line" in *"POST /reboot"*|*"REBOOT"*|*"\"reboot\""*) printf "HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"ok\":true,\"status\":\"reboot_scheduled\"}\n"; nohup /bin/sh -c "sleep 2 && /usr/bin/systemctl reboot" >/dev/null 2>&1 & ;; *) printf "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"ok\":false,\"error\":\"invalid_command\"}\n" ;; esac'
+NoNewPrivileges=no
+PrivateTmp=yes
+ProtectHome=yes

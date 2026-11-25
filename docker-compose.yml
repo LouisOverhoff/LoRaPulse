@@ -1,0 +1,82 @@
+# ==============================================================================
+# LoRaPulse v0.0.1 – Universal Base Stack (Reverse-Proxy-Neutral)
+# Default mode binds safely to 127.0.0.1:${APP_PORT:-8080}:8080.
+# For Traefik or Caddy HTTPS setups, combine via COMPOSE_FILE in .env:
+#   Traefik: COMPOSE_FILE=docker-compose.yml:docker-compose.traefik.yml
+#   Caddy:   COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml
+# ==============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    shm_size: 128mb
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lorapulse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be configured in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-lorapulse}
+    volumes:
+      - lorapulse-pgdata:/var/lib/postgresql/data
+    networks:
+      - lorapulse-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER:-lorapulse}\" -d \"$${POSTGRES_DB:-lorapulse}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  lorapulse:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lorapulse:0.0.1
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8080
+      APP_PORT: 8080
+      APP_NAME: ${APP_NAME:-LoRaPulse}
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-127.0.0.1,172.16.0.0/12,10.0.0.0/8}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be configured in .env}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?ENCRYPTION_MASTER_KEY must be configured in .env}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET must be configured in .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      ENABLE_EMBEDDED_SIMULATOR: ${ENABLE_EMBEDDED_SIMULATOR:-false}
+      ENABLE_HOST_REBOOT: ${ENABLE_HOST_REBOOT:-false}
+      HOST_REBOOT_SOCKET_PATH: ${HOST_REBOOT_SOCKET_PATH:-/run/lorapulse-reboot/reboot.sock}
+    networks:
+      - lorapulse-internal
+      - lorapulse-egress
+
+volumes:
+  lorapulse-pgdata:
+    name: lorapulse-pgdata
+
+networks:
+  # Air-gapped internal database network (no external routing, no host port exposure)
+  lorapulse-internal:
+    driver: bridge
+    internal: true
+  # Outbound network allowing lorapulse to connect to TTN MQTT TLS (8883) & TTN HTTPS API (443)
+  lorapulse-egress:
+    driver: bridge
