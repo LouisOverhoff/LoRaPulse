@@ -1,4 +1,5 @@
-export const APP_VERSION = '0.0.1';
+export const APP_VERSION = '0.0.2';
+export const GITHUB_REPO_URL = 'https://github.com/LouisOverhoff/LoRaPulse';
 
 export type Language = 'de' | 'en';
 export type SystemRole = 'SUPER_ADMIN' | 'ADMIN' | 'USER';
@@ -97,6 +98,7 @@ export interface SensorFieldDef {
 export interface SensorProfile {
   id: string;
   name: string;
+  localizedName?: LocalizedText;
   brand: string;
   model: string;
   icon: SensorIconName;
@@ -126,6 +128,18 @@ export interface DownlinkStatus {
   error?: string;
 }
 
+export interface UserDevicePreference {
+  pushEnabled: boolean;
+  emailEnabled: boolean;
+  isFavorite: boolean;
+}
+
+export const DEFAULT_USER_DEVICE_PREFERENCE: UserDevicePreference = {
+  pushEnabled: true,
+  emailEnabled: false,
+  isFavorite: false,
+};
+
 export interface DeviceView {
   id: string;
   ttnApplicationId: string;
@@ -151,6 +165,8 @@ export interface DeviceView {
   spreadingFactor: string | null;
   status: DeviceHealthStatus;
   lastSeenAt: string | null;
+  maintenanceUntil: string | null;
+  userPreference: UserDevicePreference;
   pendingDownlink: DownlinkStatus | null;
   effectivePermission: EffectiveAccess;
   createdAt: string;
@@ -179,6 +195,7 @@ export interface AlertItem {
   status: 'OPEN' | 'ACKED' | 'RESOLVED';
   ackedByName: string | null;
   ackedAt: string | null;
+  resolvedAt?: string | null;
   createdAt: string;
 }
 
@@ -194,11 +211,36 @@ export interface AuditLogItem {
   createdAt: string;
 }
 
+export interface PushSubscriptionSummary {
+  id: string;
+  deviceLabel: string;
+  endpointPreview: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+export interface SmtpSettingsSummary {
+  configured: boolean;
+  enabled: boolean;
+  host: string;
+  port: number;
+  secure: boolean;
+  username: string;
+  maskedPassword: string;
+  fromEmail: string;
+  fromName: string;
+  publicBaseUrl: string;
+  updatedAt: string | null;
+}
+
 export interface AuthBootstrapStatus {
   appName: string;
   version: string;
+  repoUrl: string;
   needsSetup: boolean;
   demoMode: boolean;
+  smtpConfigured: boolean;
+  vapidPublicKey: string | null;
   user: UserSummary | null;
 }
 
@@ -207,4 +249,5 @@ export type SseEvent =
   | { type: 'device_updated'; device: DeviceView }
   | { type: 'alert_updated'; alert: AlertItem }
   | { type: 'ttn_status'; app: TtnApplicationSummary }
-  | { type: 'permissions_changed' };
+  | { type: 'permissions_changed' }
+  | { type: 'profiles_changed' };

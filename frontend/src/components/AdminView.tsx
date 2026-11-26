@@ -1,12 +1,16 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import {
   AlertTriangle,
+  Bell,
   Code2,
   Copy,
   FolderPlus,
   KeyRound,
+  Mail,
   Power,
   RefreshCw,
+  Save,
+  Send,
   Server,
   Shield,
   Smartphone,
@@ -22,13 +26,22 @@ import type {
   Language,
   PermissionGrant,
   PermissionLevel,
+  PushSubscriptionSummary,
   SensorProfile,
+  SmtpSettingsSummary,
   TtnApplicationSummary,
   UserGroup,
   UserSummary,
 } from '@lorapulse/shared';
-import { api, ApiError } from '../api';
-import { t } from '../i18n';
+import { api } from '../api';
+import {
+  formatAuditActionLabel,
+  formatAuditTargetLabel,
+  formatRoleLabel,
+  formatTtnStatusLabel,
+  t,
+  translateApiError,
+} from '../i18n';
 import {
   formatDateTime,
   isAdminOrSuper,
@@ -36,17 +49,46 @@ import {
 } from '../utils/telemetry';
 import { JsonMapperPanel } from './JsonMapperPanel';
 
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+function detectDeviceLabel(lang: Language): string {
+  if (typeof navigator === 'undefined') {
+    return lang === 'de' ? 'Web-Browser' : 'Web Browser';
+  }
+  const ua = navigator.userAgent || '';
+  if (/iPhone/i.test(ua)) return 'iPhone (Safari)';
+  if (/iPad/i.test(ua)) return 'iPad (Safari)';
+  if (/Android/i.test(ua)) return 'Android';
+  if (/Windows/i.test(ua)) return 'Windows (Browser)';
+  if (/Macintosh|Mac OS X/i.test(ua)) return 'macOS (Browser)';
+  if (/Linux/i.test(ua)) return 'Linux (Browser)';
+  return lang === 'de' ? 'Web-Browser' : 'Web Browser';
+}
+
 export function AdminView({
   user,
   devices,
   categories,
   profiles,
   ttnAppsFromSse,
+  smtpConfigured,
+  vapidPublicKey,
   lang,
   onChangeLang,
   onUserUpdated,
   onCategoriesChanged,
   onProfileSaved,
+  onProfileDeleted,
+  onSmtpConfiguredChanged,
   onNotify,
 }: {
   user: UserSummary;
@@ -54,11 +96,15 @@ export function AdminView({
   categories: CategoryNode[];
   profiles: SensorProfile[];
   ttnAppsFromSse: TtnApplicationSummary[];
+  smtpConfigured: boolean;
+  vapidPublicKey: string | null;
   lang: Language;
   onChangeLang: (lang: Language) => void;
   onUserUpdated: (user: UserSummary) => void;
   onCategoriesChanged: () => Promise<void>;
   onProfileSaved: (profile: SensorProfile) => void;
+  onProfileDeleted: (profileId: string) => Promise<void>;
+  onSmtpConfiguredChanged: (configured: boolean) => void;
   onNotify: (msg: string, kind?: 'info' | 'error') => void;
 }) {
   const adminAccess = isAdminOrSuper(user);
@@ -75,6 +121,18 @@ export function AdminView({
   const [newPassword, setNewPassword] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
 
+  // Web-Push state
+  const [pushSubs, setPushSubs] = useState<PushSubscriptionSummary[]>([]);
+  const [pushDeviceName, setPushDeviceName] = useState(() => detectDeviceLabel(lang));
+  const [subscribingPush, setSubscribingPush] = useState(false);
+  const [testingPush, setTestingPush] = useState(false);
+
+  const pushSupported =
+    typeof window !== 'undefined' &&
+    'serviceWorker' in navigator &&
+    'PushManager' in window &&
+    'Notification' in window;
+
   const isStandalonePwa =
     typeof window !== 'undefined' &&
     (window.matchMedia?.('(display-mode: standalone)').matches === true ||
@@ -89,7 +147,9 @@ export function AdminView({
   const [invName, setInvName] = useState('');
   const [invRole, setInvRole] = useState<'USER' | 'ADMIN'>('USER');
   const [invGroupIds, setInvGroupIds] = useState<string[]>([]);
+  const [invSendEmail, setInvSendEmail] = useState<boolean>(false);
   const [generatedInviteUrl, setGeneratedInviteUrl] = useState<string | null>(null);
+  const [inviteEmailWasSent, setInviteEmailWasSent] = useState(false);
 
   const [grpName, setGrpName] = useState('');
   const [grpDesc, setGrpDesc] = useState('');
@@ -105,7 +165,7 @@ export function AdminView({
   const [permDeviceId, setPermDeviceId] = useState('');
   const [permLevel, setPermLevel] = useState<PermissionLevel>('VIEWER');
 
-  // Super Admin state (TTN Apps, System Control, Audit Logs)
+  // Super Admin state (TTN Apps, SMTP Mail Server, System Control, Audit Logs)
   const [ttnApps, setTtnApps] = useState<TtnApplicationSummary[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
 
@@ -116,6 +176,23 @@ export function AdminView({
   const [ttnTls, setTtnTls] = useState(true);
   const [ttnApiKey, setTtnApiKey] = useState('');
   const [savingTtn, setSavingTtn] = useState(false);
+
+  // SMTP Settings state
+  const [smtpSummary, setSmtpSummary] = useState<SmtpSettingsSummary | null>(null);
+  const [smtpEnabled, setSmtpEnabled] = useState(true);
+  const [smtpHost, setSmtpHost] = useState('');
+  const [smtpPort, setSmtpPort] = useState(587);
+  const [smtpSecure, setSmtpSecure] = useState(false);
+  const [smtpUsername, setSmtpUsername] = useState('');
+  const [smtpPassword, setSmtpPassword] = useState('');
+  const [smtpFromEmail, setSmtpFromEmail] = useState('');
+  const [smtpFromName, setSmtpFromName] = useState('LoRaPulse');
+  const [smtpPublicUrl, setSmtpPublicUrl] = useState(() =>
+    typeof window !== 'undefined' ? window.location.origin : ''
+  );
+  const [savingSmtp, setSavingSmtp] = useState(false);
+  const [smtpTestEmail, setSmtpTestEmail] = useState(user.email);
+  const [testingSmtp, setTestingSmtp] = useState(false);
 
   const [sysPassword, setSysPassword] = useState('');
   const [runningSysAction, setRunningSysAction] = useState<string | null>(null);
@@ -132,6 +209,15 @@ export function AdminView({
     });
   }, [ttnAppsFromSse]);
 
+  async function loadPushSubscriptions() {
+    try {
+      const subs = await api.getPushSubscriptions();
+      setPushSubs(subs);
+    } catch {
+      // Ignore if endpoint is temporarily unavailable
+    }
+  }
+
   async function loadAdminData() {
     if (!adminAccess) return;
     try {
@@ -146,26 +232,40 @@ export function AdminView({
       if (!permUserId && u[0]) setPermUserId(u[0].id);
       if (!permGroupId && g[0]) setPermGroupId(g[0].id);
     } catch (err) {
-      onNotify(err instanceof Error ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     }
   }
 
   async function loadSuperData() {
     if (!superAdminAccess) return;
     try {
-      const [apps, logs] = await Promise.all([
+      const [apps, logs, smtp] = await Promise.all([
         api.getTtnApps(),
         api.getAuditLogs(),
+        api.getSmtpSettings().catch(() => null),
       ]);
       setTtnApps(apps);
       setAuditLogs(logs);
+      if (smtp) {
+        setSmtpSummary(smtp);
+        setSmtpEnabled(smtp.enabled);
+        if (smtp.host) setSmtpHost(smtp.host);
+        if (smtp.port) setSmtpPort(smtp.port);
+        setSmtpSecure(Boolean(smtp.secure));
+        setSmtpUsername(smtp.username ?? '');
+        if (smtp.fromEmail) setSmtpFromEmail(smtp.fromEmail);
+        if (smtp.fromName) setSmtpFromName(smtp.fromName);
+        if (smtp.publicBaseUrl) setSmtpPublicUrl(smtp.publicBaseUrl);
+      }
     } catch (err) {
-      onNotify(err instanceof Error ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     }
   }
 
   useEffect(() => {
-    if (subTab === 'access' && adminAccess) {
+    if (subTab === 'profile') {
+      loadPushSubscriptions();
+    } else if (subTab === 'access' && adminAccess) {
       loadAdminData();
     } else if (subTab === 'system' && superAdminAccess) {
       loadSuperData();
@@ -193,9 +293,83 @@ export function AdminView({
       setNewPassword('');
       onNotify(t(profLang, 'savedSuccess'), 'info');
     } catch (err) {
-      onNotify(err instanceof ApiError ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     } finally {
       setSavingProfile(false);
+    }
+  }
+
+  async function handleEnablePush() {
+    if (!pushSupported) {
+      onNotify(t(lang, 'pushUnsupportedNotice'), 'error');
+      return;
+    }
+    if (!vapidPublicKey) {
+      onNotify(t(lang, 'pushNoVapidNotice'), 'error');
+      return;
+    }
+
+    setSubscribingPush(true);
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        onNotify(t(lang, 'pushPermissionDenied'), 'error');
+        return;
+      }
+
+      let reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) {
+        reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      }
+      const readyReg = await navigator.serviceWorker.ready;
+
+      let sub = await readyReg.pushManager.getSubscription();
+      if (!sub) {
+        const appServerKey = urlBase64ToUint8Array(vapidPublicKey);
+        sub = await readyReg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: appServerKey.buffer as ArrayBuffer,
+        });
+      }
+
+      const json = sub.toJSON();
+      const p256dh = json.keys?.p256dh ?? '';
+      const auth = json.keys?.auth ?? '';
+
+      await api.registerPushSubscription({
+        endpoint: sub.endpoint,
+        keys: { p256dh, auth },
+        deviceLabel: pushDeviceName.trim() || detectDeviceLabel(lang),
+      });
+
+      await loadPushSubscriptions();
+      onNotify(t(lang, 'pushRegisteredSuccess'), 'info');
+    } catch (err) {
+      onNotify(translateApiError(err, lang), 'error');
+    } finally {
+      setSubscribingPush(false);
+    }
+  }
+
+  async function handleDeletePushSub(id: string) {
+    try {
+      await api.deletePushSubscription(id);
+      setPushSubs((prev) => prev.filter((s) => s.id !== id));
+      onNotify(t(lang, 'pushRemovedSuccess'), 'info');
+    } catch (err) {
+      onNotify(translateApiError(err, lang), 'error');
+    }
+  }
+
+  async function handleSendTestPush() {
+    setTestingPush(true);
+    try {
+      await api.sendTestPush();
+      onNotify(t(lang, 'pushTestSentSuccess'), 'info');
+    } catch (err) {
+      onNotify(translateApiError(err, lang), 'error');
+    } finally {
+      setTestingPush(false);
     }
   }
 
@@ -207,17 +381,19 @@ export function AdminView({
         displayName: invName.trim(),
         systemRole: invRole,
         groupIds: invGroupIds,
+        sendEmail: smtpConfigured && invSendEmail,
       });
       const fullUrl = res.invitePath.startsWith('http')
         ? res.invitePath
         : `${window.location.origin}${res.invitePath.startsWith('/') ? '' : '/'}${res.invitePath}`;
       setGeneratedInviteUrl(fullUrl);
+      setInviteEmailWasSent(Boolean(res.emailSent));
       setInvEmail('');
       setInvName('');
       setInvGroupIds([]);
       await loadAdminData();
     } catch (err) {
-      onNotify(err instanceof ApiError ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     }
   }
 
@@ -227,7 +403,7 @@ export function AdminView({
       await loadAdminData();
       onNotify(t(lang, 'savedSuccess'), 'info');
     } catch (err) {
-      onNotify(err instanceof ApiError ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     }
   }
 
@@ -239,7 +415,7 @@ export function AdminView({
       await api.updateUser(u.id, { groupIds: nextGroups });
       await loadAdminData();
     } catch (err) {
-      onNotify(err instanceof ApiError ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     }
   }
 
@@ -255,7 +431,7 @@ export function AdminView({
       setGrpDesc('');
       await loadAdminData();
     } catch (err) {
-      onNotify(err instanceof ApiError ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     }
   }
 
@@ -270,7 +446,7 @@ export function AdminView({
       setCatParentId('');
       await onCategoriesChanged();
     } catch (err) {
-      onNotify(err instanceof ApiError ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     }
   }
 
@@ -287,7 +463,7 @@ export function AdminView({
       await loadAdminData();
       onNotify(t(lang, 'savedSuccess'), 'info');
     } catch (err) {
-      onNotify(err instanceof ApiError ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     }
   }
 
@@ -310,9 +486,51 @@ export function AdminView({
       await loadSuperData();
       onNotify(t(lang, 'savedSuccess'), 'info');
     } catch (err) {
-      onNotify(err instanceof ApiError ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     } finally {
       setSavingTtn(false);
+    }
+  }
+
+  async function handleSaveSmtp(e: FormEvent) {
+    e.preventDefault();
+    setSavingSmtp(true);
+    try {
+      const saved = await api.saveSmtpSettings({
+        enabled: smtpEnabled,
+        host: smtpHost.trim(),
+        port: Number(smtpPort) || 587,
+        secure: smtpSecure,
+        username: smtpUsername.trim(),
+        password: smtpPassword.trim() ? smtpPassword : undefined,
+        fromEmail: smtpFromEmail.trim(),
+        fromName: smtpFromName.trim() || 'LoRaPulse',
+        publicBaseUrl: smtpPublicUrl.trim(),
+      });
+      setSmtpSummary(saved);
+      setSmtpPassword('');
+      onSmtpConfiguredChanged(Boolean(saved.configured && saved.enabled));
+      await loadSuperData();
+      onNotify(t(lang, 'smtpSavedSuccess'), 'info');
+    } catch (err) {
+      onNotify(translateApiError(err, lang), 'error');
+    } finally {
+      setSavingSmtp(false);
+    }
+  }
+
+  async function handleTestSmtp(e: FormEvent) {
+    e.preventDefault();
+    if (!smtpTestEmail.trim()) return;
+    setTestingSmtp(true);
+    try {
+      await api.sendTestSmtpEmail(smtpTestEmail.trim());
+      await loadSuperData();
+      onNotify(t(lang, 'smtpTestSuccess'), 'info');
+    } catch (err) {
+      onNotify(translateApiError(err, lang), 'error');
+    } finally {
+      setTestingSmtp(false);
     }
   }
 
@@ -327,7 +545,7 @@ export function AdminView({
       onNotify(t(lang, 'systemActionTriggered'), 'info');
       await loadSuperData();
     } catch (err) {
-      onNotify(err instanceof ApiError ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     } finally {
       setRunningSysAction(null);
     }
@@ -396,9 +614,9 @@ export function AdminView({
         )}
       </div>
 
-      {/* SUB-TAB 1: PROFILE & iOS PWA */}
+      {/* SUB-TAB 1: PROFILE, WEB-PUSH DEVICES & PWA STATUS */}
       {subTab === 'profile' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
           <section className="lp-surface rounded-2xl p-5 space-y-4">
             <h2 className="text-base font-bold">{t(lang, 'profileTitle')}</h2>
 
@@ -484,36 +702,132 @@ export function AdminView({
                 disabled={savingProfile}
                 className="lp-btn-primary"
               >
+                <Save className="w-4 h-4" strokeWidth={1.85} />
                 {savingProfile ? t(lang, 'saving') : t(lang, 'save')}
               </button>
             </form>
-          </section>
-
-          <section className="lp-surface rounded-2xl p-5 space-y-3 h-fit">
-            <div className="flex items-center gap-2">
-              <Smartphone className="w-5 h-5 text-[var(--accent)]" strokeWidth={1.85} />
-              <h2 className="text-base font-bold">{t(lang, 'pwaStatusTitle')}</h2>
-            </div>
-
-            <div
-              className={`p-3.5 rounded-xl border text-xs leading-relaxed ${
-                isStandalonePwa
-                  ? 'bg-emerald-500/12 border-emerald-500/30 text-emerald-500'
-                  : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-secondary)]'
-              }`}
-            >
-              {isStandalonePwa
-                ? t(lang, 'pwaStandaloneActive')
-                : t(lang, 'pwaBrowserTabNotice')}
-            </div>
 
             <div className="lp-elevated rounded-xl p-3.5 flex items-center justify-between text-xs">
-              <span className="text-[var(--text-muted)]">System Role</span>
-              <span className="font-mono font-bold text-[var(--accent)]">
-                {user.systemRole}
+              <span className="text-[var(--text-muted)]">{t(lang, 'systemRoleLabel')}</span>
+              <span className="font-semibold text-[var(--accent)]">
+                {formatRoleLabel(user.systemRole, lang)}
               </span>
             </div>
           </section>
+
+          <div className="space-y-5">
+            {/* Web-Push Devices Card (Smartphone & Desktop) */}
+            <section className="lp-surface rounded-2xl p-5 space-y-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Bell className="w-5 h-5 text-[var(--accent)]" strokeWidth={1.9} />
+                  <h2 className="text-base font-bold">{t(lang, 'pushCardTitle')}</h2>
+                </div>
+                <p className="text-xs text-[var(--text-secondary)] mt-1 leading-relaxed">
+                  {t(lang, 'pushCardDesc')}
+                </p>
+              </div>
+
+              {!pushSupported ? (
+                <div className="p-3 rounded-xl bg-amber-500/12 border border-amber-500/30 text-amber-500 text-xs leading-relaxed">
+                  {t(lang, 'pushUnsupportedNotice')}
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  <div>
+                    <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                      {t(lang, 'pushDeviceNameLabel')}
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={100}
+                      value={pushDeviceName}
+                      onChange={(e) => setPushDeviceName(e.target.value)}
+                      className="lp-input text-xs"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      disabled={subscribingPush || !vapidPublicKey}
+                      onClick={handleEnablePush}
+                      className="lp-btn-primary text-xs"
+                    >
+                      <Bell className="w-3.5 h-3.5" strokeWidth={1.9} />
+                      {subscribingPush
+                        ? t(lang, 'pushSubscribing')
+                        : t(lang, 'pushSubscribeBtn')}
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={testingPush || pushSubs.length === 0}
+                      onClick={handleSendTestPush}
+                      className="lp-btn-secondary text-xs"
+                    >
+                      <Send className="w-3.5 h-3.5" strokeWidth={1.85} />
+                      {testingPush ? t(lang, 'pushTesting') : t(lang, 'pushTestBtn')}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-[var(--border-subtle)] space-y-2">
+                {pushSubs.length === 0 ? (
+                  <div className="text-xs text-[var(--text-muted)] py-1">
+                    {t(lang, 'pushEmptyList')}
+                  </div>
+                ) : (
+                  pushSubs.map((sub) => (
+                    <div
+                      key={sub.id}
+                      className="lp-elevated rounded-xl px-3 py-2.5 flex items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-semibold truncate">{sub.deviceLabel}</div>
+                        <div className="font-mono text-[11px] text-[var(--text-muted)] truncate">
+                          {sub.endpointPreview} ·{' '}
+                          {t(lang, 'pushRegisteredAt', {
+                            date: formatDateTime(sub.createdAt, lang),
+                          })}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePushSub(sub.id)}
+                        className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/12 transition-colors shrink-0 cursor-pointer"
+                        title={t(lang, 'delete')}
+                        aria-label={t(lang, 'delete')}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" strokeWidth={1.85} />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+
+            {/* Mobile Field Use & Standalone PWA Status */}
+            <section className="lp-surface rounded-2xl p-5 space-y-3">
+              <div className="flex items-center gap-2">
+                <Smartphone className="w-5 h-5 text-[var(--accent)]" strokeWidth={1.85} />
+                <h2 className="text-base font-bold">{t(lang, 'pwaStatusTitle')}</h2>
+              </div>
+
+              <div
+                className={`p-3.5 rounded-xl border text-xs leading-relaxed ${
+                  isStandalonePwa
+                    ? 'bg-emerald-500/12 border-emerald-500/30 text-emerald-500'
+                    : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-secondary)]'
+                }`}
+              >
+                {isStandalonePwa
+                  ? t(lang, 'pwaStandaloneActive')
+                  : t(lang, 'pwaBrowserTabNotice')}
+              </div>
+            </section>
+          </div>
         </div>
       )}
 
@@ -551,8 +865,8 @@ export function AdminView({
                   onChange={(e) => setInvRole(e.target.value as 'USER' | 'ADMIN')}
                   className="lp-input text-xs"
                 >
-                  <option value="USER">USER ({t(lang, 'roleUser')})</option>
-                  <option value="ADMIN">ADMIN ({t(lang, 'roleAdmin')})</option>
+                  <option value="USER">{t(lang, 'roleUser')}</option>
+                  <option value="ADMIN">{t(lang, 'roleAdmin')}</option>
                 </select>
 
                 {groups.length > 0 && (
@@ -583,6 +897,28 @@ export function AdminView({
                   </div>
                 )}
 
+                <div className="pt-1 space-y-1">
+                  <label
+                    className={`flex items-center gap-2 text-xs ${
+                      smtpConfigured ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      disabled={!smtpConfigured}
+                      checked={smtpConfigured && invSendEmail}
+                      onChange={(e) => setInvSendEmail(e.target.checked)}
+                      className="rounded accent-emerald-500"
+                    />
+                    <span>{t(lang, 'inviteSendEmailCheckbox')}</span>
+                  </label>
+                  {!smtpConfigured && (
+                    <div className="text-[11px] text-[var(--text-muted)] leading-snug">
+                      {t(lang, 'inviteSendEmailNoSmtpHint')}
+                    </div>
+                  )}
+                </div>
+
                 <button type="submit" className="lp-btn-primary w-full text-xs">
                   <KeyRound className="w-3.5 h-3.5" strokeWidth={1.85} />
                   {t(lang, 'inviteCreateBtn')}
@@ -612,6 +948,12 @@ export function AdminView({
                       <Copy className="w-3.5 h-3.5" strokeWidth={1.85} />
                     </button>
                   </div>
+                  {inviteEmailWasSent && (
+                    <div className="text-[11px] text-sky-400 flex items-center gap-1.5">
+                      <Mail className="w-3.5 h-3.5 shrink-0" strokeWidth={1.85} />
+                      <span>{t(lang, 'inviteEmailDispatchedNotice')}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </section>
@@ -627,8 +969,8 @@ export function AdminView({
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-semibold truncate">{u.displayName}</span>
-                        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-500/15 text-[var(--text-secondary)]">
-                          {u.systemRole}
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-500/15 text-[var(--text-secondary)]">
+                          {formatRoleLabel(u.systemRole, lang)}
                         </span>
                         <span
                           className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
@@ -730,7 +1072,10 @@ export function AdminView({
                     <button
                       type="button"
                       onClick={() =>
-                        api.deleteGroup(g.id).then(() => loadAdminData())
+                        api
+                          .deleteGroup(g.id)
+                          .then(() => loadAdminData())
+                          .catch((err) => onNotify(translateApiError(err, lang), 'error'))
                       }
                       className="text-red-500 p-1 hover:opacity-80"
                     >
@@ -785,7 +1130,10 @@ export function AdminView({
                     <button
                       type="button"
                       onClick={() =>
-                        api.deleteCategory(c.id).then(() => onCategoriesChanged())
+                        api
+                          .deleteCategory(c.id)
+                          .then(() => onCategoriesChanged())
+                          .catch((err) => onNotify(translateApiError(err, lang), 'error'))
                       }
                       className="text-red-500 p-1 hover:opacity-80"
                     >
@@ -928,11 +1276,9 @@ export function AdminView({
                   onChange={(e) => setPermLevel(e.target.value as PermissionLevel)}
                   className="lp-input text-xs"
                 >
-                  <option value="VIEWER">VIEWER ({t(lang, 'roleViewer')})</option>
-                  <option value="OPERATOR">OPERATOR ({t(lang, 'roleOperator')})</option>
-                  <option value="CATEGORY_ADMIN">
-                    CATEGORY_ADMIN ({t(lang, 'roleCategoryAdmin')})
-                  </option>
+                  <option value="VIEWER">{t(lang, 'roleViewer')}</option>
+                  <option value="OPERATOR">{t(lang, 'roleOperator')}</option>
+                  <option value="CATEGORY_ADMIN">{t(lang, 'roleCategoryAdmin')}</option>
                 </select>
               </div>
 
@@ -961,13 +1307,16 @@ export function AdminView({
                       <span className="text-[var(--text-muted)]">-&gt;</span>
                       <span className="font-mono">{targetLabel}</span>
                       <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[var(--accent-soft)] text-[var(--accent)]">
-                        {perm.level}
+                        {formatRoleLabel(perm.level, lang)}
                       </span>
                     </div>
                     <button
                       type="button"
                       onClick={() =>
-                        api.deletePermission(perm.id).then(() => loadAdminData())
+                        api
+                          .deletePermission(perm.id)
+                          .then(() => loadAdminData())
+                          .catch((err) => onNotify(translateApiError(err, lang), 'error'))
                       }
                       className="text-red-500 p-1 hover:opacity-80"
                     >
@@ -988,11 +1337,12 @@ export function AdminView({
           profiles={profiles}
           lang={lang}
           onProfileSaved={onProfileSaved}
+          onProfileDeleted={onProfileDeleted}
           onNotify={onNotify}
         />
       )}
 
-      {/* SUB-TAB 4: SUPER ADMIN TTN MQTT, 3-STAGE SYSTEM CONTROL & AUDIT LOGS */}
+      {/* SUB-TAB 4: SUPER ADMIN TTN MQTT, SMTP MAIL SERVER, 3-STAGE SYSTEM CONTROL & AUDIT LOGS */}
       {subTab === 'system' && superAdminAccess && (
         <div className="space-y-6">
           {/* TTN v3 Applications */}
@@ -1094,15 +1444,15 @@ export function AdminView({
                                 : 'bg-amber-500/15 text-amber-500'
                           }`}
                         >
-                          {app.connectionStatus}
+                          {formatTtnStatusLabel(app.connectionStatus, lang)}
                         </span>
                       </div>
                       <div className="font-mono text-[11px] text-[var(--text-muted)] truncate">
-                        {app.ttnAppId} · {app.host}:{app.port} · Key {app.maskedApiKey}
+                        {app.ttnAppId} · {app.host}:{app.port} ·{' '}
+                        {t(lang, 'ttnMaskedKeyPrefix')} {app.maskedApiKey}
                       </div>
                       <div className="text-[11px] text-[var(--text-secondary)]">
-                        {t(lang, 'ttnLastMsg')}:{' '}
-                        {formatDateTime(app.lastMessageAt, lang)}
+                        {t(lang, 'ttnLastMsg')}: {formatDateTime(app.lastMessageAt, lang)}
                       </div>
                       {app.lastError && (
                         <div className="text-[11px] text-red-500 font-mono">
@@ -1119,10 +1469,7 @@ export function AdminView({
                             .reconnectTtnApp(app.id)
                             .then(() => loadSuperData())
                             .catch((err) =>
-                              onNotify(
-                                err instanceof Error ? err.message : String(err),
-                                'error'
-                              )
+                              onNotify(translateApiError(err, lang), 'error')
                             )
                         }
                         className="lp-btn-secondary !py-1.5 !px-2.5 text-xs"
@@ -1133,7 +1480,12 @@ export function AdminView({
                       <button
                         type="button"
                         onClick={() =>
-                          api.deleteTtnApp(app.id).then(() => loadSuperData())
+                          api
+                            .deleteTtnApp(app.id)
+                            .then(() => loadSuperData())
+                            .catch((err) =>
+                              onNotify(translateApiError(err, lang), 'error')
+                            )
                         }
                         className="lp-btn-danger !py-1.5 !px-2.5 text-xs"
                       >
@@ -1145,6 +1497,198 @@ export function AdminView({
               </div>
             </section>
           </div>
+
+          {/* SMTP Mail Server Configuration Card */}
+          <section className="lp-surface rounded-2xl p-5 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold flex items-center gap-2">
+                  <Mail className="w-4 h-4 text-[var(--accent)]" strokeWidth={1.85} />
+                  {t(lang, 'smtpSectionTitle')}
+                </h3>
+                <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                  {t(lang, 'smtpSectionDesc')}
+                </p>
+              </div>
+
+              <span
+                className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold shrink-0 w-fit ${
+                  smtpSummary?.configured && smtpSummary.enabled
+                    ? 'bg-emerald-500/14 text-emerald-500 border border-emerald-500/30'
+                    : 'bg-slate-500/14 text-[var(--text-muted)] border border-[var(--border-subtle)]'
+                }`}
+              >
+                {smtpSummary?.configured && smtpSummary.enabled
+                  ? t(lang, 'smtpStatusActive')
+                  : t(lang, 'smtpStatusInactive')}
+              </span>
+            </div>
+
+            <form onSubmit={handleSaveSmtp} className="space-y-3.5">
+              <div className="flex flex-wrap items-center gap-5">
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={smtpEnabled}
+                    onChange={(e) => setSmtpEnabled(e.target.checked)}
+                    className="accent-emerald-500"
+                  />
+                  <span className="font-medium">{t(lang, 'smtpEnabledCheckbox')}</span>
+                </label>
+
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={smtpSecure}
+                    onChange={(e) => setSmtpSecure(e.target.checked)}
+                    className="accent-emerald-500"
+                  />
+                  <span>{t(lang, 'smtpSecureCheckbox')}</span>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                    {t(lang, 'smtpHostLabel')}
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={smtpHost}
+                    onChange={(e) => setSmtpHost(e.target.value)}
+                    className="lp-input font-mono text-xs"
+                    placeholder="smtp.example.org"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                    {t(lang, 'smtpPortLabel')}
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    max={65535}
+                    value={smtpPort}
+                    onChange={(e) => setSmtpPort(Number(e.target.value))}
+                    className="lp-input font-mono text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                    {t(lang, 'smtpUsernameLabel')}
+                  </label>
+                  <input
+                    type="text"
+                    value={smtpUsername}
+                    onChange={(e) => setSmtpUsername(e.target.value)}
+                    className="lp-input text-xs"
+                    autoComplete="off"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                    {t(lang, 'smtpPasswordLabel')}
+                  </label>
+                  <input
+                    type="password"
+                    value={smtpPassword}
+                    onChange={(e) => setSmtpPassword(e.target.value)}
+                    placeholder={
+                      smtpSummary?.maskedPassword
+                        ? t(lang, 'smtpPasswordSavedHint', {
+                            masked: smtpSummary.maskedPassword,
+                          })
+                        : t(lang, 'smtpPasswordNewPlaceholder')
+                    }
+                    className="lp-input font-mono text-xs"
+                    autoComplete="new-password"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                    {t(lang, 'smtpFromEmailLabel')}
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={smtpFromEmail}
+                    onChange={(e) => setSmtpFromEmail(e.target.value)}
+                    className="lp-input text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                    {t(lang, 'smtpFromNameLabel')}
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={smtpFromName}
+                    onChange={(e) => setSmtpFromName(e.target.value)}
+                    className="lp-input text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                    {t(lang, 'smtpPublicUrlLabel')}
+                  </label>
+                  <input
+                    type="url"
+                    value={smtpPublicUrl}
+                    onChange={(e) => setSmtpPublicUrl(e.target.value)}
+                    className="lp-input font-mono text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={savingSmtp}
+                  className="lp-btn-primary text-xs"
+                >
+                  <Save className="w-3.5 h-3.5" strokeWidth={1.85} />
+                  {savingSmtp ? t(lang, 'saving') : t(lang, 'smtpSaveBtn')}
+                </button>
+              </div>
+            </form>
+
+            {/* Test Email Subsection */}
+            <form
+              onSubmit={handleTestSmtp}
+              className="pt-3.5 border-t border-[var(--border-subtle)] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+            >
+              <span className="text-xs font-semibold text-[var(--text-secondary)]">
+                {t(lang, 'smtpTestTitle')}
+              </span>
+              <div className="flex items-center gap-2 flex-1 sm:max-w-md">
+                <input
+                  type="email"
+                  required
+                  value={smtpTestEmail}
+                  onChange={(e) => setSmtpTestEmail(e.target.value)}
+                  placeholder={t(lang, 'smtpTestRecipientPlaceholder')}
+                  className="lp-input text-xs"
+                />
+                <button
+                  type="submit"
+                  disabled={testingSmtp || !smtpSummary?.configured}
+                  className="lp-btn-secondary text-xs shrink-0"
+                >
+                  <Send className="w-3.5 h-3.5" strokeWidth={1.85} />
+                  {testingSmtp ? t(lang, 'smtpTesting') : t(lang, 'smtpTestSendBtn')}
+                </button>
+              </div>
+            </form>
+          </section>
 
           {/* 3-Stage Password-Confirmed System Control */}
           <section className="lp-surface rounded-2xl p-5 space-y-4">
@@ -1242,16 +1786,21 @@ export function AdminView({
                       </td>
                       <td className="py-2 pr-3 whitespace-nowrap">
                         {log.actorEmail}{' '}
-                        <span className="text-[10px] font-mono text-[var(--text-muted)]">
-                          ({log.actorRole})
+                        <span className="text-[10px] text-[var(--text-muted)]">
+                          ({formatRoleLabel(log.actorRole, lang)})
                         </span>
                       </td>
-                      <td className="py-2 pr-3 font-mono font-semibold text-[var(--accent)]">
-                        {log.action}
+                      <td className="py-2 pr-3 font-semibold text-[var(--accent)]">
+                        {formatAuditActionLabel(log.action, lang)}
                       </td>
-                      <td className="py-2 font-mono text-[var(--text-secondary)]">
-                        {log.targetType}
-                        {log.targetId ? `:${log.targetId.slice(0, 12)}` : ''}
+                      <td className="py-2 text-[var(--text-secondary)]">
+                        <span>{formatAuditTargetLabel(log.targetType, lang)}</span>
+                        {log.targetId && (
+                          <span className="font-mono text-[11px] text-[var(--text-muted)]">
+                            {' '}
+                            ({log.targetId.slice(0, 10)})
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}

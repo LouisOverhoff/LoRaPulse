@@ -3,32 +3,44 @@ import {
   Activity,
   AlertTriangle,
   ArrowDownUp,
+  Bell,
   Clock,
   Download,
   LocateFixed,
   Lock,
+  Mail,
   Save,
   Send,
   Settings2,
+  Star,
+  Wrench,
   X,
 } from 'lucide-react';
 import {
+  DEFAULT_USER_DEVICE_PREFERENCE,
   encodeDraginoTdcDownlink,
+  formatProfileDisplayName,
   type CategoryNode,
   type DeviceView,
   type Language,
   type MeasurementPoint,
   type SensorFieldDef,
   type SensorProfile,
+  type UserDevicePreference,
   type UserSummary,
 } from '@lorapulse/shared';
-import { api, ApiError } from '../api';
-import { t } from '../i18n';
+import { api } from '../api';
+import { useNowTick } from '../hooks/useNowTick';
+import { t, translateApiError } from '../i18n';
 import {
+  canAckAccess,
   canConfigureDevice,
   formatDateTime,
   formatDeviceReadings,
+  formatLocalizedUnit,
+  formatMaintenanceUntil,
   isContactOpenValue,
+  isMaintenanceActive,
   isOutlierForField,
   isSuperAdmin,
   resolveProfile,
@@ -45,6 +57,7 @@ export function SensorDetailModal({
   categories,
   profiles,
   user,
+  smtpConfigured,
   lang,
   onClose,
   onDeviceUpdated,
@@ -54,11 +67,13 @@ export function SensorDetailModal({
   categories: CategoryNode[];
   profiles: SensorProfile[];
   user: UserSummary;
+  smtpConfigured: boolean;
   lang: Language;
   onClose: () => void;
   onDeviceUpdated: (updated: DeviceView) => void;
   onNotify: (msg: string, kind?: 'info' | 'error') => void;
 }) {
+  const nowMs = useNowTick(10000);
   const profile = useMemo(
     () => resolveProfile(device.sensorProfileId, profiles),
     [device.sensorProfileId, profiles]
@@ -73,6 +88,9 @@ export function SensorDetailModal({
   const [selectedFieldKey, setSelectedFieldKey] = useState<string>('');
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [exporting, setExporting] = useState<'csv' | 'json' | null>(null);
+
+  const [savingPref, setSavingPref] = useState(false);
+  const [savingMaint, setSavingMaint] = useState(false);
 
   // Config form state
   const [cfgName, setCfgName] = useState(device.name);
@@ -252,16 +270,62 @@ export function SensorDetailModal({
     return { min, max, avg, count: vals.length };
   }, [chartSeries]);
 
+  const canOperate = canAckAccess(device.effectivePermission, user);
   const canEdit = canConfigureDevice(device, user);
   const superAdmin = isSuperAdmin(user);
   const readings = formatDeviceReadings(device, profile, lang);
+  const pref = device.userPreference ?? DEFAULT_USER_DEVICE_PREFERENCE;
+  const inMaintenance = isMaintenanceActive(device.maintenanceUntil, nowMs);
+
+  async function handleToggleUserPref(patch: Partial<UserDevicePreference>) {
+    setSavingPref(true);
+    const optimisticPref: UserDevicePreference = { ...pref, ...patch };
+    onDeviceUpdated({ ...device, userPreference: optimisticPref });
+    try {
+      const res = await api.updateDeviceUserPreference(device.id, patch);
+      if (res.device) {
+        onDeviceUpdated(res.device);
+      } else if (res.preference) {
+        onDeviceUpdated({ ...device, userPreference: res.preference });
+      }
+    } catch (err) {
+      onDeviceUpdated(device);
+      onNotify(translateApiError(err, lang), 'error');
+    } finally {
+      setSavingPref(false);
+    }
+  }
+
+  async function handleSetMaintenance(durationMinutes: number | null) {
+    if (!canOperate) return;
+    setSavingMaint(true);
+    try {
+      const res = await api.setDeviceMaintenance(device.id, durationMinutes);
+      if (res.device) {
+        onDeviceUpdated(res.device);
+      } else {
+        const nextUntil =
+          res.maintenanceUntil !== undefined
+            ? res.maintenanceUntil
+            : durationMinutes && durationMinutes > 0
+              ? new Date(Date.now() + durationMinutes * 60000).toISOString()
+              : null;
+        onDeviceUpdated({ ...device, maintenanceUntil: nextUntil });
+      }
+      onNotify(t(lang, 'maintenanceUpdatedSuccess'), 'info');
+    } catch (err) {
+      onNotify(translateApiError(err, lang), 'error');
+    } finally {
+      setSavingMaint(false);
+    }
+  }
 
   async function handleExport(format: 'csv' | 'json') {
     setExporting(format);
     try {
       await api.downloadDeviceExport(device.id, device.devEui, format);
     } catch (err) {
-      onNotify(err instanceof Error ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     } finally {
       setExporting(null);
     }
@@ -312,7 +376,7 @@ export function SensorDetailModal({
       onDeviceUpdated(updated);
       onNotify(t(lang, 'savedSuccess'), 'info');
     } catch (err) {
-      onNotify(err instanceof ApiError ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     } finally {
       setSavingCfg(false);
     }
@@ -331,7 +395,7 @@ export function SensorDetailModal({
       }
       onNotify(t(lang, 'dlQueuedSuccess'), 'info');
     } catch (err) {
-      onNotify(err instanceof ApiError ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     } finally {
       setSendingDl(false);
     }
@@ -384,6 +448,8 @@ export function SensorDetailModal({
     return { mapped, linePath, areaPath, minV, maxV };
   }, [chartSeries.valid, plotW, plotH]);
 
+  const activeFieldUnit = activeField ? formatLocalizedUnit(activeField.unit, lang) : '';
+
   return (
     <div
       className="fixed inset-0 z-50 bg-black/65 backdrop-blur-[2px] flex items-end sm:items-center justify-center p-0 sm:p-4"
@@ -394,7 +460,7 @@ export function SensorDetailModal({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="px-5 py-4 border-b border-[var(--border-subtle)] flex items-start justify-between gap-3">
+        <div className="px-5 py-3.5 border-b border-[var(--border-subtle)] flex items-start justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
               <SensorVectorIcon icon={profile.icon} className="w-5 h-5" />
@@ -405,7 +471,7 @@ export function SensorDetailModal({
                 <StatusBadge status={device.status} lang={lang} />
               </div>
               <div className="font-mono text-xs text-[var(--text-muted)] truncate mt-0.5">
-                {device.devEui} · {profile.name}
+                {device.devEui} · {formatProfileDisplayName(profile, lang)}
               </div>
             </div>
           </div>
@@ -421,7 +487,7 @@ export function SensorDetailModal({
         </div>
 
         {/* Sub-Tabs */}
-        <div className="px-5 pt-2 border-b border-[var(--border-subtle)] flex items-center gap-1 overflow-x-auto">
+        <div className="px-5 pt-1.5 border-b border-[var(--border-subtle)] flex items-center gap-1 overflow-x-auto">
           <button
             type="button"
             onClick={() => setActiveTab('telemetry')}
@@ -464,7 +530,126 @@ export function SensorDetailModal({
         </div>
 
         {/* Modal Body */}
-        <div className="p-5 overflow-y-auto space-y-5">
+        <div className="p-5 overflow-y-auto space-y-4">
+          {/* Personal Sensor Preferences (visible for ALL users, including VIEWER) */}
+          <div className="lp-elevated rounded-xl p-3.5 space-y-2.5">
+            <div className="text-xs font-bold text-[var(--text-secondary)]">
+              {t(lang, 'mySensorPrefsTitle')}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={savingPref}
+                onClick={() => handleToggleUserPref({ isFavorite: !pref.isFavorite })}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+                  pref.isFavorite
+                    ? 'bg-amber-500/14 border-amber-500/40 text-amber-400'
+                    : 'bg-[var(--bg-surface)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]'
+                }`}
+              >
+                <Star
+                  className={`w-3.5 h-3.5 ${pref.isFavorite ? 'fill-amber-400' : ''}`}
+                  strokeWidth={1.9}
+                />
+                <span>{t(lang, 'prefFavoriteLabel')}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={savingPref}
+                onClick={() => handleToggleUserPref({ pushEnabled: !pref.pushEnabled })}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+                  pref.pushEnabled
+                    ? 'bg-[var(--accent-soft)] border-[var(--accent-border)] text-[var(--accent)]'
+                    : 'bg-[var(--bg-surface)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]'
+                }`}
+              >
+                <Bell className="w-3.5 h-3.5" strokeWidth={1.9} />
+                <span>{t(lang, 'prefPushLabel')}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={savingPref}
+                onClick={() => handleToggleUserPref({ emailEnabled: !pref.emailEnabled })}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+                  pref.emailEnabled
+                    ? 'bg-sky-500/15 border-sky-500/40 text-sky-400'
+                    : 'bg-[var(--bg-surface)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]'
+                }`}
+              >
+                <Mail className="w-3.5 h-3.5" strokeWidth={1.9} />
+                <span>{t(lang, 'prefEmailLabel')}</span>
+              </button>
+            </div>
+
+            {pref.emailEnabled && !smtpConfigured && (
+              <div className="text-[11px] text-amber-500 flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" strokeWidth={1.85} />
+                <span>{t(lang, 'prefEmailNoSmtpHint')}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Maintenance Mode Quick Control (Idea C - visible for OPERATOR+) */}
+          {canOperate ? (
+            <div className="lp-elevated rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--text-secondary)]">
+                  <Wrench className="w-3.5 h-3.5 text-amber-500 shrink-0" strokeWidth={1.85} />
+                  <span>{t(lang, 'maintenanceSectionTitle')}</span>
+                </div>
+                {inMaintenance && (
+                  <div className="text-[11px] text-amber-500 font-medium mt-0.5">
+                    {t(lang, 'maintenanceActiveNotice', {
+                      time: formatMaintenanceUntil(device.maintenanceUntil, lang, nowMs),
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="inline-flex items-center gap-1 flex-wrap shrink-0">
+                {(
+                  [
+                    { mins: 0, labelKey: 'maintenanceOff' },
+                    { mins: 60, labelKey: 'maintenance1h' },
+                    { mins: 240, labelKey: 'maintenance4h' },
+                    { mins: 1440, labelKey: 'maintenance24h' },
+                  ] as const
+                ).map((opt) => {
+                  const isActiveBtn = opt.mins === 0 ? !inMaintenance : false;
+                  return (
+                    <button
+                      key={opt.mins}
+                      type="button"
+                      disabled={savingMaint}
+                      onClick={() => handleSetMaintenance(opt.mins === 0 ? null : opt.mins)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+                        isActiveBtn
+                          ? 'bg-[var(--accent)] text-white border-transparent'
+                          : 'bg-[var(--bg-surface)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:border-[var(--border-strong)]'
+                      }`}
+                    >
+                      {t(lang, opt.labelKey)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            inMaintenance && (
+              <div className="p-3 rounded-xl bg-amber-500/14 border border-amber-500/35 text-amber-500 text-xs flex items-center gap-2">
+                <Wrench className="w-4 h-4 shrink-0" strokeWidth={1.85} />
+                <span>
+                  {t(lang, 'maintenanceActiveNotice', {
+                    time: formatMaintenanceUntil(device.maintenanceUntil, lang, nowMs),
+                  })}
+                </span>
+              </div>
+            )
+          )}
+
           {activeTab === 'telemetry' && (
             <>
               {/* Current Readings Strip */}
@@ -497,12 +682,15 @@ export function SensorDetailModal({
                       aria-label={t(lang, 'fieldSelectLabel')}
                       className="lp-input !w-auto !py-1.5 text-xs"
                     >
-                      {chartableFields.map((f) => (
-                        <option key={f.key} value={f.key}>
-                          {f.label[lang] || f.key}
-                          {f.unit ? ` (${f.unit})` : ''}
-                        </option>
-                      ))}
+                      {chartableFields.map((f) => {
+                        const unitLbl = formatLocalizedUnit(f.unit, lang);
+                        return (
+                          <option key={f.key} value={f.key}>
+                            {f.label[lang] || f.key}
+                            {unitLbl ? ` (${unitLbl})` : ''}
+                          </option>
+                        );
+                      })}
                     </select>
                   )}
 
@@ -576,7 +764,7 @@ export function SensorDetailModal({
                 ) : chartSeries.valid.length === 1 ? (
                   <div className="h-44 flex flex-col items-center justify-center gap-2 text-xs text-[var(--text-secondary)] text-center px-4">
                     <div className="text-lg font-bold text-[var(--accent)]">
-                      {chartSeries.valid[0].val} {activeField?.unit ?? ''}
+                      {chartSeries.valid[0].val} {activeFieldUnit}
                     </div>
                     <div>{t(lang, 'chartSinglePoint')}</div>
                   </div>
@@ -705,7 +893,7 @@ export function SensorDetailModal({
                             {chartCoords.mapped[hoverIdx].val.toFixed(
                               activeField?.decimals ?? 2
                             )}{' '}
-                            {activeField?.unit ?? ''}
+                            {activeFieldUnit}
                           </span>
                         </div>
                       )}
@@ -720,8 +908,7 @@ export function SensorDetailModal({
                         {t(lang, 'statMin')}
                       </div>
                       <div className="text-xs font-mono font-semibold">
-                        {stats.min.toFixed(activeField?.decimals ?? 1)}{' '}
-                        {activeField?.unit ?? ''}
+                        {stats.min.toFixed(activeField?.decimals ?? 1)} {activeFieldUnit}
                       </div>
                     </div>
                     <div>
@@ -729,8 +916,7 @@ export function SensorDetailModal({
                         {t(lang, 'statAvg')}
                       </div>
                       <div className="text-xs font-mono font-semibold">
-                        {stats.avg.toFixed(activeField?.decimals ?? 1)}{' '}
-                        {activeField?.unit ?? ''}
+                        {stats.avg.toFixed(activeField?.decimals ?? 1)} {activeFieldUnit}
                       </div>
                     </div>
                     <div>
@@ -738,8 +924,7 @@ export function SensorDetailModal({
                         {t(lang, 'statMax')}
                       </div>
                       <div className="text-xs font-mono font-semibold">
-                        {stats.max.toFixed(activeField?.decimals ?? 1)}{' '}
-                        {activeField?.unit ?? ''}
+                        {stats.max.toFixed(activeField?.decimals ?? 1)} {activeFieldUnit}
                       </div>
                     </div>
                     <div>
@@ -757,15 +942,19 @@ export function SensorDetailModal({
                 <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">
                   {t(lang, 'rfMetadataTitle')}
                 </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                   <div>
-                    <div className="text-[var(--text-muted)]">TTN App / Device ID</div>
-                    <div className="font-mono font-medium truncate">
+                    <div className="text-[var(--text-muted)]">
+                      {t(lang, 'rfTtnAppAndDeviceLabel')}
+                    </div>
+                    <div className="font-mono font-medium truncate mt-0.5">
                       {device.ttnAppName} / {device.ttnDeviceId}
                     </div>
                   </div>
                   <div>
-                    <div className="text-[var(--text-muted)]">RSSI / SF / SNR</div>
+                    <div className="text-[var(--text-muted)]">
+                      {t(lang, 'rfSignalHeaderLabel')}
+                    </div>
                     <div className="mt-0.5 flex items-center gap-2">
                       <SignalBars
                         rssi={device.rssi}
@@ -780,12 +969,15 @@ export function SensorDetailModal({
                     </div>
                   </div>
                   <div>
-                    <div className="text-[var(--text-muted)]">Battery</div>
+                    <div className="text-[var(--text-muted)]">
+                      {t(lang, 'batteryLabel')}
+                    </div>
                     <div className="mt-0.5">
                       <BatteryGauge
                         voltage={device.batteryVoltage}
                         state={device.batteryState}
                         chemistry={profile.batteryChemistry}
+                        lang={lang}
                       />
                     </div>
                   </div>
@@ -850,7 +1042,7 @@ export function SensorDetailModal({
                     >
                       {profiles.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.name}
+                          {formatProfileDisplayName(p, lang)}
                         </option>
                       ))}
                     </select>
@@ -1056,8 +1248,10 @@ export function SensorDetailModal({
                               : t(lang, 'dlStateFailed')}
                         </span>
                         <span className="font-mono text-[var(--text-muted)]">
-                          {device.pendingDownlink.intervalMinutes} min · FPort{' '}
-                          {device.pendingDownlink.fPort} · 0x
+                          {t(lang, 'minutesShort', {
+                            n: device.pendingDownlink.intervalMinutes,
+                          })}{' '}
+                          · FPort {device.pendingDownlink.fPort} · 0x
                           {device.pendingDownlink.payloadHex}
                         </span>
                       </div>
@@ -1093,7 +1287,9 @@ export function SensorDetailModal({
                                 : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[var(--border-subtle)]'
                             }`}
                           >
-                            {preset >= 60 ? `${preset / 60}h` : `${preset}m`}
+                            {preset >= 60
+                              ? t(lang, 'hoursShort', { n: preset / 60 })
+                              : t(lang, 'minutesShort', { n: preset })}
                           </button>
                         ))}
                       </div>

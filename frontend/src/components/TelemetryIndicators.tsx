@@ -12,7 +12,7 @@ import type {
   Language,
   SensorIconName,
 } from '@lorapulse/shared';
-import { t } from '../i18n';
+import { formatBatteryBadgeText, t } from '../i18n';
 
 export function SensorVectorIcon({
   icon,
@@ -46,7 +46,12 @@ export function StatusBadge({
 }) {
   const styles: Record<
     DeviceHealthStatus,
-    { labelKey: 'statusOk' | 'statusAlarm' | 'statusWarn' | 'statusOffline' | 'statusNew'; dot: string; chip: string; pulse?: boolean }
+    {
+      labelKey: 'statusOk' | 'statusAlarm' | 'statusWarn' | 'statusOffline' | 'statusNew';
+      dot: string;
+      chip: string;
+      pulse?: boolean;
+    }
   > = {
     OK: {
       labelKey: 'statusOk',
@@ -160,17 +165,19 @@ export function BatteryGauge({
   voltage,
   state,
   chemistry = 'li_socl2_3v6',
+  lang,
   compact = false,
 }: {
   voltage: number | null;
   state: BatteryHealthState;
   chemistry?: BatteryChemistry;
+  lang: Language;
   compact?: boolean;
 }) {
   if (chemistry === 'none') {
     return (
-      <span className="inline-flex items-center gap-1 font-mono text-[11px] text-[var(--text-secondary)]">
-        EXT
+      <span className="inline-flex items-center px-1.5 py-[1px] rounded text-[10px] font-bold tracking-wide border bg-slate-500/12 text-[var(--text-secondary)] border-[var(--border-subtle)]">
+        {formatBatteryBadgeText('EXT', lang)}
       </span>
     );
   }
@@ -188,32 +195,35 @@ export function BatteryGauge({
 
   const stateCfg: Record<
     BatteryHealthState,
-    { fillHex: string; badgeText: string; badgeClass: string }
+    { fillHex: string; badgeClass: string }
   > = {
     OK: {
       fillHex: '#10b981',
-      badgeText: 'OK',
       badgeClass: 'bg-emerald-500/12 text-emerald-500 border-emerald-500/30',
     },
     LOW: {
       fillHex: '#f59e0b',
-      badgeText: 'LOW',
       badgeClass: 'bg-amber-500/15 text-amber-500 border-amber-500/35',
     },
     CRITICAL: {
       fillHex: '#ef4444',
-      badgeText: 'CRIT',
       badgeClass: 'bg-red-500/15 text-red-500 border-red-500/35',
     },
     UNKNOWN: {
       fillHex: '#64748b',
-      badgeText: '--',
       badgeClass: 'bg-slate-500/12 text-slate-400 border-slate-500/25',
     },
   };
 
   const cfg = stateCfg[state] ?? stateCfg.UNKNOWN;
   const barWidth = Math.round((fillPercent / 100) * 16);
+  const formattedVoltage =
+    voltage !== null
+      ? `${voltage.toLocaleString(lang === 'de' ? 'de-DE' : 'en-US', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })} V`
+      : '-- V';
 
   return (
     <div className="inline-flex items-center gap-1.5 text-xs">
@@ -258,14 +268,14 @@ export function BatteryGauge({
 
       {!compact && (
         <span className="font-mono text-[11px] text-[var(--text-secondary)] whitespace-nowrap">
-          {voltage !== null ? `${voltage.toFixed(2)} V` : '-- V'}
+          {formattedVoltage}
         </span>
       )}
 
       <span
         className={`px-1.5 py-[1px] rounded text-[10px] font-bold tracking-wide border ${cfg.badgeClass}`}
       >
-        {cfg.badgeText}
+        {formatBatteryBadgeText(state, lang)}
       </span>
     </div>
   );

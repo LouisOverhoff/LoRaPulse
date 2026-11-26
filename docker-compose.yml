@@ -32,7 +32,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: lorapulse:0.0.1
+    image: lorapulse:0.0.2
     restart: unless-stopped
     depends_on:
       postgres:

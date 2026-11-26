@@ -13,6 +13,16 @@ export const LoginSchema = z.object({
   password: z.string().min(1).max(128),
 });
 
+export const RequestPasswordResetSchema = z.object({
+  email: z.string().email(),
+  lang: z.enum(['de', 'en']).default('de'),
+});
+
+export const ConfirmPasswordResetSchema = z.object({
+  token: z.string().min(16),
+  newPassword: z.string().min(10).max(128),
+});
+
 export const RedeemInviteSchema = z.object({
   token: z.string().min(16),
   displayName: z.string().min(2).max(80).optional(),
@@ -25,6 +35,7 @@ export const CreateInviteUserSchema = z.object({
   displayName: z.string().min(2).max(80),
   systemRole: z.enum(['ADMIN', 'USER']).default('USER'),
   groupIds: z.array(z.string()).default([]),
+  sendEmail: z.boolean().default(false),
 });
 
 export const CreateGroupSchema = z.object({
@@ -83,9 +94,50 @@ export const UpdateDeviceSchema = z.object({
     .optional(),
 });
 
+export const UpdateDeviceUserPreferenceSchema = z.object({
+  pushEnabled: z.boolean().optional(),
+  emailEnabled: z.boolean().optional(),
+  isFavorite: z.boolean().optional(),
+});
+
+export const SetDeviceMaintenanceSchema = z.object({
+  durationMinutes: z.number().int().min(0).max(10080).nullable(),
+});
+
+export const RegisterPushSubscriptionSchema = z.object({
+  endpoint: z.string().url().max(2048),
+  keys: z.object({
+    p256dh: z.string().min(10).max(512),
+    auth: z.string().min(6).max(256),
+  }),
+  deviceLabel: z.string().min(1).max(100).optional(),
+});
+
+export const SaveSmtpSettingsSchema = z.object({
+  enabled: z.boolean().default(true),
+  host: z.string().min(2).max(200),
+  port: z.number().int().min(1).max(65535).default(587),
+  secure: z.boolean().default(false),
+  username: z.string().max(200).default(''),
+  password: z.string().max(512).optional(),
+  fromEmail: z.string().email().max(200),
+  fromName: z.string().min(1).max(100).default('LoRaPulse'),
+  publicBaseUrl: z.string().max(300).default(''),
+});
+
+export const TestSmtpSchema = z.object({
+  recipientEmail: z.string().email(),
+});
+
 export const SaveSensorProfileSchema = z.object({
   id: z.string().min(2).max(64).regex(/^[a-z0-9_-]+$/),
   name: z.string().min(2).max(80),
+  localizedName: z
+    .object({
+      de: z.string().min(1).max(80),
+      en: z.string().min(1).max(80),
+    })
+    .optional(),
   brand: z.string().max(50).default('custom'),
   model: z.string().max(50).default('custom'),
   icon: z.enum(['door', 'thermometer', 'cloud', 'activity', 'radio']).default('radio'),

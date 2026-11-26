@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
-  FolderTree,
   Folder,
+  FolderTree,
   Inbox,
   Link2,
   List,
@@ -23,11 +23,13 @@ export function SensorsView({
   profiles,
   lang,
   onSelectDevice,
+  onToggleFavorite,
 }: {
   devices: DeviceView[];
   profiles: SensorProfile[];
   lang: Language;
   onSelectDevice: (device: DeviceView) => void;
+  onToggleFavorite: (device: DeviceView) => void;
 }) {
   const [query, setQuery] = useState('');
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
@@ -70,19 +72,19 @@ export function SensorsView({
     }
 
     const sortedCategories = Array.from(categoryBuckets.entries()).sort(([a], [b]) =>
-      a.localeCompare(b)
+      a.localeCompare(b, lang === 'de' ? 'de' : 'en')
     );
 
     return { sortedCategories, directShares, uncategorized };
-  }, [filtered]);
+  }, [filtered, lang]);
 
   if (devices.length === 0) {
     return (
-      <section className="lp-surface rounded-2xl p-8 sm:p-12 text-center max-w-xl mx-auto my-6">
-        <div className="w-12 h-12 rounded-2xl bg-slate-500/12 border border-[var(--border-subtle)] flex items-center justify-center mx-auto mb-4 text-[var(--text-secondary)]">
+      <section className="lp-surface rounded-2xl p-8 sm:p-10 text-center max-w-xl mx-auto my-4">
+        <div className="w-12 h-12 rounded-2xl bg-slate-500/12 border border-[var(--border-subtle)] flex items-center justify-center mx-auto mb-3.5 text-[var(--text-secondary)]">
           <Lock className="w-6 h-6" strokeWidth={1.85} />
         </div>
-        <h2 className="text-base font-bold mb-2">{t(lang, 'emptySensorsTitle')}</h2>
+        <h2 className="text-base font-bold mb-1.5">{t(lang, 'emptySensorsTitle')}</h2>
         <p className="text-xs sm:text-sm text-[var(--text-secondary)] leading-relaxed">
           {t(lang, 'emptySensorsDesc')}
         </p>
@@ -91,7 +93,7 @@ export function SensorsView({
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* Search, Status & Tree/Flat Mode Bar */}
       <div className="lp-surface rounded-xl p-3 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
         <div className="relative flex-1">
@@ -158,7 +160,7 @@ export function SensorsView({
           {t(lang, 'noMatchingSensors')}
         </div>
       ) : viewMode === 'flat' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
           {filtered.map((dev) => (
             <DeviceCard
               key={dev.id}
@@ -166,11 +168,12 @@ export function SensorsView({
               profile={resolveProfile(dev.sensorProfileId, profiles)}
               lang={lang}
               onClick={() => onSelectDevice(dev)}
+              onToggleFavorite={onToggleFavorite}
             />
           ))}
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-5">
           {/* Hierarchical Categories */}
           {groupedSections.sortedCategories.map(([pathLabel, items]) => (
             <section key={pathLabel} className="space-y-2.5">
@@ -187,7 +190,7 @@ export function SensorsView({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
                 {items.map((dev) => (
                   <DeviceCard
                     key={dev.id}
@@ -195,6 +198,7 @@ export function SensorsView({
                     profile={resolveProfile(dev.sensorProfileId, profiles)}
                     lang={lang}
                     onClick={() => onSelectDevice(dev)}
+                    onToggleFavorite={onToggleFavorite}
                   />
                 ))}
               </div>
@@ -221,7 +225,7 @@ export function SensorsView({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
                 {groupedSections.directShares.map((dev) => (
                   <DeviceCard
                     key={dev.id}
@@ -229,6 +233,7 @@ export function SensorsView({
                     profile={resolveProfile(dev.sensorProfileId, profiles)}
                     lang={lang}
                     onClick={() => onSelectDevice(dev)}
+                    onToggleFavorite={onToggleFavorite}
                   />
                 ))}
               </div>
@@ -255,7 +260,7 @@ export function SensorsView({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
                 {groupedSections.uncategorized.map((dev) => (
                   <DeviceCard
                     key={dev.id}
@@ -263,6 +268,7 @@ export function SensorsView({
                     profile={resolveProfile(dev.sensorProfileId, profiles)}
                     lang={lang}
                     onClick={() => onSelectDevice(dev)}
+                    onToggleFavorite={onToggleFavorite}
                   />
                 ))}
               </div>

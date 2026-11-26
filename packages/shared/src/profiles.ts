@@ -1,13 +1,18 @@
 import type {
   BatteryChemistry,
   BatteryHealthState,
+  Language,
   SensorProfile,
 } from './types.js';
 
 export const BUILTIN_SENSOR_PROFILES: SensorProfile[] = [
   {
     id: 'dragino_ds03a_lb',
-    name: 'Dragino DS03A-LB (Outdoor Door / Contact)',
+    name: 'Dragino DS03A-LB (Tür- & Kontaktsensor)',
+    localizedName: {
+      de: 'Dragino DS03A-LB (Tür- & Kontaktsensor)',
+      en: 'Dragino DS03A-LB (Outdoor Door / Contact)',
+    },
     brand: 'dragino',
     model: 'ds03a-lb',
     icon: 'door',
@@ -53,7 +58,11 @@ export const BUILTIN_SENSOR_PROFILES: SensorProfile[] = [
   },
   {
     id: 'dragino_d20_lb',
-    name: 'Dragino D20-LB (Outdoor Temperature)',
+    name: 'Dragino D20-LB (Außentemperatursensor)',
+    localizedName: {
+      de: 'Dragino D20-LB (Außentemperatursensor)',
+      en: 'Dragino D20-LB (Outdoor Temperature)',
+    },
     brand: 'dragino',
     model: 'd20-lb',
     icon: 'thermometer',
@@ -84,7 +93,11 @@ export const BUILTIN_SENSOR_PROFILES: SensorProfile[] = [
   },
   {
     id: 'weather_station',
-    name: 'Wetterstation / Weather Station',
+    name: 'Wetterstation',
+    localizedName: {
+      de: 'Wetterstation',
+      en: 'Weather Station',
+    },
     brand: 'generic',
     model: 'weather-station',
     icon: 'cloud',
@@ -142,7 +155,11 @@ export const BUILTIN_SENSOR_PROFILES: SensorProfile[] = [
   },
   {
     id: 'generic_json',
-    name: 'Generischer LoRaWAN Sensor (JSON)',
+    name: 'Generischer LoRaWAN-Sensor (JSON)',
+    localizedName: {
+      de: 'Generischer LoRaWAN-Sensor (JSON)',
+      en: 'Generic LoRaWAN Sensor (JSON)',
+    },
     brand: 'generic',
     model: 'generic',
     icon: 'radio',
@@ -153,10 +170,13 @@ export const BUILTIN_SENSOR_PROFILES: SensorProfile[] = [
   },
 ];
 
-/**
- * Evaluates battery health specifically tailored to Li-SOCl2 (3.6V flat discharge curve)
- * vs standard 3.0V Alkaline cells.
- */
+export function formatProfileDisplayName(profile: SensorProfile, lang: Language): string {
+  const builtIn = BUILTIN_SENSOR_PROFILES.find((p) => p.id === profile.id);
+  if (profile.localizedName?.[lang]) return profile.localizedName[lang];
+  if (builtIn?.localizedName?.[lang]) return builtIn.localizedName[lang];
+  return profile.name;
+}
+
 export function evaluateBatteryHealth(
   voltage: number | null | undefined,
   chemistry: BatteryChemistry
@@ -170,16 +190,11 @@ export function evaluateBatteryHealth(
     if (voltage >= 3.22) return 'LOW';
     return 'CRITICAL';
   }
-  // 3.0V Alkaline
   if (voltage >= 2.65) return 'OK';
   if (voltage >= 2.4) return 'LOW';
   return 'CRITICAL';
 }
 
-/**
- * Encodes Dragino TDC (Transmit Duty Cycle / Uplink Interval) downlink command:
- * FPort 2, Payload: 0x01 followed by 3-byte Big-Endian interval in seconds.
- */
 export function encodeDraginoTdcDownlink(intervalMinutes: number): {
   fPort: number;
   payloadBytes: number[];
@@ -194,7 +209,6 @@ export function encodeDraginoTdcDownlink(intervalMinutes: number): {
   const payloadHex = payloadBytes
     .map((b) => b.toString(16).padStart(2, '0').toUpperCase())
     .join('');
-  // Pure JS base64 encoding (works in Node & Browser)
   const binary = String.fromCharCode(...payloadBytes);
   const payloadBase64 =
     typeof btoa === 'function'
@@ -204,9 +218,6 @@ export function encodeDraginoTdcDownlink(intervalMinutes: number): {
   return { fPort: 2, payloadBytes, payloadHex, payloadBase64 };
 }
 
-/**
- * Fallback binary payload decoder for Dragino DS03A-LB & D20-LB if TTN decoded_payload is absent.
- */
 export function decodeDraginoBinaryFallback(
   profileId: string,
   bytes: Uint8Array
@@ -214,10 +225,8 @@ export function decodeDraginoBinaryFallback(
   if (!bytes || bytes.length < 4) return null;
 
   if (profileId === 'dragino_ds03a_lb' && bytes.length >= 10) {
-    // Standard Dragino Door Sensor 10/11-byte format:
-    // Byte 0..1: Status bits + Battery voltage in mV (14 bits)
     const batMv = ((bytes[0] & 0x3f) << 8) | bytes[1];
-    const doorOpenStatus = (bytes[0] & 0x80) ? 1 : 0;
+    const doorOpenStatus = bytes[0] & 0x80 ? 1 : 0;
     const openTimes = (bytes[3] << 16) | (bytes[4] << 8) | bytes[5];
     const lastDuration = (bytes[6] << 16) | (bytes[7] << 8) | bytes[8];
     const alarm = bytes[9] & 0x01;
@@ -243,9 +252,6 @@ export function decodeDraginoBinaryFallback(
   return null;
 }
 
-/**
- * Detects matching built-in profile ID from TTN version_ids or payload keys.
- */
 export function detectSensorProfileId(
   versionIds?: { brand_id?: string; model_id?: string } | null,
   decodedPayload?: Record<string, unknown> | null

@@ -1,16 +1,28 @@
 import {
   AlertTriangle,
+  Bell,
   Clock,
   Folder,
   Inbox,
   Link2,
+  Mail,
   MapPin,
+  Star,
+  Wrench,
 } from 'lucide-react';
-import type { DeviceView, Language, SensorProfile } from '@lorapulse/shared';
+import {
+  DEFAULT_USER_DEVICE_PREFERENCE,
+  type DeviceView,
+  type Language,
+  type SensorProfile,
+} from '@lorapulse/shared';
+import { useNowTick } from '../hooks/useNowTick';
 import { t } from '../i18n';
 import {
   formatDeviceReadings,
-  formatRelativeTime,
+  formatLiveTimestamp,
+  formatMaintenanceUntil,
+  isMaintenanceActive,
 } from '../utils/telemetry';
 import {
   BatteryGauge,
@@ -24,19 +36,26 @@ export function DeviceCard({
   profile,
   lang,
   onClick,
+  onToggleFavorite,
 }: {
   device: DeviceView;
   profile: SensorProfile;
   lang: Language;
   onClick?: () => void;
+  onToggleFavorite?: (device: DeviceView) => void;
 }) {
+  const nowMs = useNowTick(10000);
   const readings = formatDeviceReadings(device, profile, lang);
   const primaryReading = readings.find((r) => r.isPrimary) ?? readings[0] ?? null;
-  const secondaryReadings = readings.filter((r) => r !== primaryReading).slice(0, 3);
+  const secondaryReadings = readings.filter((r) => r !== primaryReading).slice(0, 4);
+
   const hasAnyPacket =
     Boolean(device.lastSeenAt) || Object.keys(device.latestValues ?? {}).length > 0;
   const hasProbeError =
     device.probeErrorFields.length > 0 || readings.some((r) => r.isProbeError);
+
+  const pref = device.userPreference ?? DEFAULT_USER_DEVICE_PREFERENCE;
+  const inMaintenance = isMaintenanceActive(device.maintenanceUntil, nowMs);
 
   const edgeColor: Record<DeviceView['status'], string> = {
     OK: 'border-l-emerald-500',
@@ -63,11 +82,11 @@ export function DeviceCard({
       }
       className={`lp-surface rounded-xl border-l-4 ${
         edgeColor[device.status] ?? 'border-l-slate-500'
-      } p-4 flex flex-col justify-between gap-3.5 transition-colors ${
+      } p-3.5 flex flex-col justify-between gap-3 transition-colors ${
         onClick ? 'cursor-pointer hover:border-[var(--border-strong)]' : ''
       } ${device.status === 'OFFLINE' ? 'opacity-90' : ''}`}
     >
-      {/* Top row: Category / Share badge + Status */}
+      {/* Top row: Category / Share badge + Notification icons + Favorite Star + Status */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-[11px] font-medium text-[var(--text-muted)] mb-1 truncate">
@@ -105,18 +124,70 @@ export function DeviceCard({
           </div>
         </div>
 
-        <StatusBadge status={device.status} lang={lang} />
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Subtle notification channel icons for this user on this sensor */}
+          {(pref.pushEnabled || pref.emailEnabled) && (
+            <div className="inline-flex items-center gap-1 text-[var(--text-muted)] mr-0.5">
+              {pref.pushEnabled && (
+                <span title={t(lang, 'notifyPushActiveHint')}>
+                  <Bell className="w-3 h-3" strokeWidth={1.9} />
+                </span>
+              )}
+              {pref.emailEnabled && (
+                <span title={t(lang, 'notifyEmailActiveHint')}>
+                  <Mail className="w-3 h-3 text-sky-400" strokeWidth={1.9} />
+                </span>
+              )}
+            </div>
+          )}
+
+          {onToggleFavorite ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleFavorite(device);
+              }}
+              title={
+                pref.isFavorite
+                  ? t(lang, 'favoriteUnpinTitle')
+                  : t(lang, 'favoritePinTitle')
+              }
+              aria-label={
+                pref.isFavorite
+                  ? t(lang, 'favoriteUnpinTitle')
+                  : t(lang, 'favoritePinTitle')
+              }
+              className={`p-1 rounded-md transition-colors cursor-pointer ${
+                pref.isFavorite
+                  ? 'text-amber-400 hover:bg-amber-500/12'
+                  : 'text-[var(--text-muted)] hover:text-amber-400 hover:bg-[var(--bg-elevated)]'
+              }`}
+            >
+              <Star
+                className={`w-3.5 h-3.5 ${pref.isFavorite ? 'fill-amber-400' : ''}`}
+                strokeWidth={1.9}
+              />
+            </button>
+          ) : (
+            pref.isFavorite && (
+              <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" strokeWidth={1.9} />
+            )
+          )}
+
+          <StatusBadge status={device.status} lang={lang} />
+        </div>
       </div>
 
-      {/* Primary & secondary telemetry values */}
+      {/* Cohesive inline cluster of all telemetry fields (left-aligned together) */}
       <div className="lp-elevated rounded-lg px-3 py-2.5">
         {!hasAnyPacket ? (
-          <div className="text-xs text-[var(--text-secondary)] py-1.5 flex items-center gap-2">
+          <div className="text-xs text-[var(--text-secondary)] py-1 flex items-center gap-2">
             <Clock className="w-4 h-4 text-sky-400 shrink-0" strokeWidth={1.85} />
             <span>{t(lang, 'waitingFirstPacket')}</span>
           </div>
         ) : primaryReading ? (
-          <div className="flex items-baseline justify-between gap-2 flex-wrap">
+          <div className="flex flex-wrap items-baseline gap-x-5 gap-y-2">
             <div>
               <div className="text-[11px] text-[var(--text-muted)]">{primaryReading.label}</div>
               <div
@@ -134,34 +205,42 @@ export function DeviceCard({
               </div>
             </div>
 
-            {secondaryReadings.length > 0 && (
-              <div className="flex items-center gap-3 flex-wrap justify-end">
-                {secondaryReadings.map((sec) => (
-                  <div key={sec.key} className="text-right">
-                    <div className="text-[10px] text-[var(--text-muted)]">{sec.label}</div>
-                    <div
-                      className={`text-xs font-semibold font-mono ${
-                        sec.isProbeError ? 'text-amber-500' : 'text-[var(--text-primary)]'
-                      }`}
-                    >
-                      {sec.displayValue}
-                    </div>
-                  </div>
-                ))}
+            {secondaryReadings.map((sec) => (
+              <div key={sec.key}>
+                <div className="text-[10px] text-[var(--text-muted)]">{sec.label}</div>
+                <div
+                  className={`text-sm font-semibold font-mono ${
+                    sec.isProbeError ? 'text-amber-500' : 'text-[var(--text-primary)]'
+                  }`}
+                >
+                  {sec.displayValue}
+                </div>
               </div>
-            )}
+            ))}
           </div>
         ) : (
           <div className="text-xs text-[var(--text-secondary)] py-1">--</div>
         )}
       </div>
 
-      {/* Special condition banners: Probe Error, Stale Offline, Pending Class-A Downlink */}
-      {(hasProbeError ||
+      {/* Special condition banners: Maintenance Mode, Probe Error, Stale Offline, Pending Downlink */}
+      {(inMaintenance ||
+        hasProbeError ||
         device.status === 'OFFLINE' ||
         device.pendingDownlink?.state === 'QUEUED' ||
         device.pendingDownlink?.state === 'FAILED') && (
         <div className="flex flex-col gap-1.5">
+          {inMaintenance && (
+            <div className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-md bg-amber-500/14 text-amber-500 border border-amber-500/35 font-medium">
+              <Wrench className="w-3.5 h-3.5 shrink-0" strokeWidth={1.85} />
+              <span className="truncate">
+                {t(lang, 'maintenanceUntilBadge', {
+                  time: formatMaintenanceUntil(device.maintenanceUntil, lang, nowMs),
+                })}
+              </span>
+            </div>
+          )}
+
           {hasProbeError && (
             <div className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-md bg-amber-500/12 text-amber-500 border border-amber-500/30">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" strokeWidth={1.9} />
@@ -180,7 +259,11 @@ export function DeviceCard({
             <div className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-md bg-sky-500/12 text-sky-400 border border-sky-500/30">
               <Clock className="w-3.5 h-3.5 shrink-0" strokeWidth={1.85} />
               <span className="truncate">
-                {t(lang, 'pendingDownlinkQueued')} ({device.pendingDownlink.intervalMinutes} min)
+                {t(lang, 'pendingDownlinkQueued')} (
+                {t(lang, 'minutesShort', {
+                  n: device.pendingDownlink.intervalMinutes,
+                })}
+                )
               </span>
             </div>
           )}
@@ -194,7 +277,7 @@ export function DeviceCard({
         </div>
       )}
 
-      {/* Footer: RF Signal + Battery + GPS indicator + Timestamp */}
+      {/* Footer: RF Signal + Battery + GPS indicator + Live-ticking Timestamp */}
       <div className="pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-3 flex-wrap">
           <SignalBars
@@ -206,17 +289,18 @@ export function DeviceCard({
             voltage={device.batteryVoltage}
             state={device.batteryState}
             chemistry={profile.batteryChemistry}
+            lang={lang}
           />
         </div>
 
-        <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
+        <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] font-mono">
           {device.latitude !== null && device.longitude !== null && (
             <MapPin
               className="w-3.5 h-3.5 text-[var(--accent)] shrink-0"
               strokeWidth={1.85}
             />
           )}
-          <span>{formatRelativeTime(device.lastSeenAt, lang)}</span>
+          <span>{formatLiveTimestamp(device.lastSeenAt, lang, nowMs)}</span>
         </div>
       </div>
     </article>

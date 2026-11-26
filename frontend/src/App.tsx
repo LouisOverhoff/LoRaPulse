@@ -3,6 +3,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Cpu,
+  ExternalLink,
   Globe,
   LayoutDashboard,
   LogOut,
@@ -15,7 +16,10 @@ import {
   WifiOff,
 } from 'lucide-react';
 import {
+  APP_VERSION,
   BUILTIN_SENSOR_PROFILES,
+  DEFAULT_USER_DEVICE_PREFERENCE,
+  GITHUB_REPO_URL,
   type AlertItem,
   type CategoryNode,
   type DeviceView,
@@ -32,7 +36,7 @@ import { MapView } from './components/MapView';
 import { OverviewView } from './components/OverviewView';
 import { SensorDetailModal } from './components/SensorDetailModal';
 import { SensorsView } from './components/SensorsView';
-import { t } from './i18n';
+import { formatRoleLabel, t, translateApiError } from './i18n';
 
 type MainTab = 'overview' | 'map' | 'sensors' | 'admin';
 
@@ -43,6 +47,15 @@ function detectInviteTokenFromUrl(): string | null {
   const searchParams = new URLSearchParams(window.location.search);
   const queryInvite = searchParams.get('invite');
   return queryInvite ? queryInvite.trim() : null;
+}
+
+function detectResetTokenFromUrl(): string | null {
+  if (typeof window === 'undefined') return null;
+  const pathMatch = window.location.pathname.match(/^\/reset-password\/([^/]+)\/?$/);
+  if (pathMatch?.[1]) return decodeURIComponent(pathMatch[1]);
+  const searchParams = new URLSearchParams(window.location.search);
+  const queryReset = searchParams.get('reset');
+  return queryReset ? queryReset.trim() : null;
 }
 
 export function App() {
@@ -58,11 +71,18 @@ export function App() {
   });
 
   const [bootstrapping, setBootstrapping] = useState(true);
+  const [appVersion, setAppVersion] = useState<string>(APP_VERSION);
+  const [repoUrl, setRepoUrl] = useState<string>(GITHUB_REPO_URL);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
+  const [smtpConfigured, setSmtpConfigured] = useState(false);
+  const [vapidPublicKey, setVapidPublicKey] = useState<string | null>(null);
   const [user, setUser] = useState<UserSummary | null>(null);
   const [inviteToken, setInviteToken] = useState<string | null>(() =>
     detectInviteTokenFromUrl()
+  );
+  const [resetToken, setResetToken] = useState<string | null>(() =>
+    detectResetTokenFromUrl()
   );
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
 
@@ -151,9 +171,14 @@ export function App() {
       .getAuthStatus()
       .then((status) => {
         if (!active) return;
+        if (status.version) setAppVersion(status.version);
+        if (status.repoUrl) setRepoUrl(status.repoUrl);
         setNeedsSetup(Boolean(status.needsSetup));
         setDemoMode(Boolean(status.demoMode));
-        if (status.user) {
+        setSmtpConfigured(Boolean(status.smtpConfigured));
+        setVapidPublicKey(status.vapidPublicKey ?? null);
+
+        if (status.user && !resetToken) {
           setUser(status.user);
           if (status.user.preferredLang) {
             setLang(status.user.preferredLang);
@@ -172,7 +197,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [resetToken]);
 
   // Fetch workspace data & connect Live SSE stream when authenticated
   useEffect(() => {
@@ -208,6 +233,13 @@ export function App() {
             const filtered = prev.filter((a) => a.id !== evt.app.id);
             return [...filtered, evt.app];
           });
+        } else if (evt.type === 'profiles_changed') {
+          Promise.all([api.getProfiles(), api.getDevices()])
+            .then(([profs, devs]) => {
+              setProfiles(profs);
+              setDevices(devs);
+            })
+            .catch(() => {});
         } else if (evt.type === 'permissions_changed') {
           api
             .getAuthStatus()
@@ -217,6 +249,10 @@ export function App() {
                 setSessionNotice(t(lang, 'sessionExpired'));
               } else {
                 setUser(st.user);
+                if (st.version) setAppVersion(st.version);
+                if (st.repoUrl) setRepoUrl(st.repoUrl);
+                setSmtpConfigured(Boolean(st.smtpConfigured));
+                setVapidPublicKey(st.vapidPublicKey ?? null);
                 loadWorkspaceData().catch(() => {});
               }
             })
@@ -240,13 +276,14 @@ export function App() {
       'alert_updated',
       'ttn_status',
       'permissions_changed',
+      'profiles_changed',
     ];
     for (const evtName of namedEvents) {
       es.addEventListener(evtName, (e) => {
         const msgEvt = e as MessageEvent<string>;
         if (!msgEvt.data) {
-          if (evtName === 'permissions_changed') {
-            handleSsePayload(JSON.stringify({ type: 'permissions_changed' }));
+          if (evtName === 'permissions_changed' || evtName === 'profiles_changed') {
+            handleSsePayload(JSON.stringify({ type: evtName }));
           }
           return;
         }
@@ -319,7 +356,43 @@ export function App() {
       );
       showToast(t(lang, 'alertAckedSuccess'), 'info');
     } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err), 'error');
+      showToast(translateApiError(err, lang), 'error');
+    }
+  }
+
+  async function handleToggleFavorite(device: DeviceView) {
+    const prevPref = device.userPreference ?? DEFAULT_USER_DEVICE_PREFERENCE;
+    const nextFav = !prevPref.isFavorite;
+    const optimisticPref = { ...prevPref, isFavorite: nextFav };
+
+    setDevices((prev) =>
+      prev.map((d) =>
+        d.id === device.id ? { ...d, userPreference: optimisticPref } : d
+      )
+    );
+
+    try {
+      const res = await api.updateDeviceUserPreference(device.id, {
+        isFavorite: nextFav,
+      });
+      if (res.device) {
+        setDevices((prev) =>
+          prev.map((d) => (d.id === device.id ? res.device! : d))
+        );
+      } else if (res.preference) {
+        setDevices((prev) =>
+          prev.map((d) =>
+            d.id === device.id ? { ...d, userPreference: res.preference! } : d
+          )
+        );
+      }
+    } catch (err) {
+      setDevices((prev) =>
+        prev.map((d) =>
+          d.id === device.id ? { ...d, userPreference: prevPref } : d
+        )
+      );
+      showToast(translateApiError(err, lang), 'error');
     }
   }
 
@@ -355,17 +428,23 @@ export function App() {
     );
   }
 
-  if (!user) {
-    const authMode: 'setup' | 'invite' | 'login' = needsSetup
+  if (!user || resetToken) {
+    const authMode: 'setup' | 'invite' | 'reset' | 'login' = needsSetup
       ? 'setup'
-      : inviteToken
-        ? 'invite'
-        : 'login';
+      : resetToken
+        ? 'reset'
+        : inviteToken
+          ? 'invite'
+          : 'login';
 
     return (
       <AuthViews
         mode={authMode}
         inviteToken={inviteToken}
+        resetToken={resetToken}
+        smtpConfigured={smtpConfigured}
+        version={appVersion}
+        repoUrl={repoUrl}
         lang={lang}
         onChangeLang={setLang}
         theme={theme}
@@ -374,17 +453,32 @@ export function App() {
         onAuthenticated={(loggedUser) => {
           setNeedsSetup(false);
           setSessionNotice(null);
-          if (inviteToken) {
+          if (inviteToken || resetToken) {
             setInviteToken(null);
+            setResetToken(null);
             window.history.replaceState({}, '', '/');
           }
           setUser(loggedUser);
           if (loggedUser.mustChangePassword) {
             setActiveTab('admin');
           }
+          // Refresh bootstrap status to pick up VAPID/SMTP flags if freshly initialized
+          api
+            .getAuthStatus()
+            .then((st) => {
+              if (st.version) setAppVersion(st.version);
+              if (st.repoUrl) setRepoUrl(st.repoUrl);
+              setSmtpConfigured(Boolean(st.smtpConfigured));
+              setVapidPublicKey(st.vapidPublicKey ?? null);
+            })
+            .catch(() => {});
         }}
         onExitInvite={() => {
           setInviteToken(null);
+          window.history.replaceState({}, '', '/');
+        }}
+        onExitReset={() => {
+          setResetToken(null);
           window.history.replaceState({}, '', '/');
         }}
       />
@@ -420,6 +514,9 @@ export function App() {
     },
   ];
 
+  const displayVersion = appVersion || APP_VERSION;
+  const targetRepoUrl = repoUrl || GITHUB_REPO_URL;
+
   return (
     <div className="min-h-screen flex flex-col md:flex-row">
       {/* Desktop Left Sidebar (>= md) */}
@@ -433,8 +530,8 @@ export function App() {
               <div className="font-bold tracking-tight text-base leading-none">
                 LoRaPulse
               </div>
-              <div className="text-[11px] text-[var(--text-muted)] truncate mt-0.5">
-                v0.0.1
+              <div className="text-[11px] text-[var(--text-muted)] truncate mt-0.5 font-mono">
+                v{displayVersion}
               </div>
             </div>
           </div>
@@ -472,8 +569,8 @@ export function App() {
         <div className="space-y-3 pt-4 border-t border-[var(--border-subtle)]">
           <div className="px-2">
             <div className="text-xs font-semibold truncate">{user.displayName}</div>
-            <div className="text-[11px] font-mono text-[var(--text-muted)] truncate">
-              {user.systemRole}
+            <div className="text-[11px] text-[var(--text-muted)] truncate">
+              {formatRoleLabel(user.systemRole, lang)}
             </div>
           </div>
 
@@ -485,6 +582,21 @@ export function App() {
             <LogOut className="w-3.5 h-3.5" strokeWidth={1.85} />
             {t(lang, 'logout')}
           </button>
+
+          <div className="px-2 pt-1 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
+            <span>
+              v{displayVersion} · {t(lang, 'mitLicense')}
+            </span>
+            <a
+              href={targetRepoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 hover:text-[var(--accent)] transition-colors"
+            >
+              <span>{t(lang, 'githubLinkLabel')}</span>
+              <ExternalLink className="w-2.5 h-2.5" strokeWidth={1.85} />
+            </a>
+          </div>
         </div>
       </aside>
 
@@ -580,7 +692,7 @@ export function App() {
         )}
 
         {/* Active View Container */}
-        <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto">
+        <main className="flex-1 p-4 sm:p-5 max-w-7xl w-full mx-auto">
           {activeTab === 'overview' && (
             <OverviewView
               devices={devices}
@@ -590,6 +702,7 @@ export function App() {
               lang={lang}
               onSelectDevice={(d) => setSelectedDeviceId(d.id)}
               onAckAlert={handleAckAlert}
+              onToggleFavorite={handleToggleFavorite}
             />
           )}
 
@@ -611,6 +724,7 @@ export function App() {
               profiles={profiles}
               lang={lang}
               onSelectDevice={(d) => setSelectedDeviceId(d.id)}
+              onToggleFavorite={handleToggleFavorite}
             />
           )}
 
@@ -621,6 +735,8 @@ export function App() {
               categories={categories}
               profiles={profiles}
               ttnAppsFromSse={ttnAppsFromSse}
+              smtpConfigured={smtpConfigured}
+              vapidPublicKey={vapidPublicKey}
               lang={lang}
               onChangeLang={setLang}
               onUserUpdated={(u) => setUser(u)}
@@ -636,10 +752,37 @@ export function App() {
                     : [...prev, saved];
                 });
               }}
+              onProfileDeleted={async (deletedId) => {
+                setProfiles((prev) => prev.filter((p) => p.id !== deletedId));
+                const [profs, devs] = await Promise.all([
+                  api.getProfiles(),
+                  api.getDevices(),
+                ]);
+                setProfiles(profs);
+                setDevices(devs);
+              }}
+              onSmtpConfiguredChanged={setSmtpConfigured}
               onNotify={showToast}
             />
           )}
         </main>
+
+        {/* Compact Mobile/Main Footer with Dynamic Version & GitHub Link */}
+        <footer className="md:hidden px-4 py-3 text-center text-[11px] text-[var(--text-muted)] flex items-center justify-center gap-1.5 flex-wrap">
+          <span>LoRaPulse v{displayVersion}</span>
+          <span>·</span>
+          <span>{t(lang, 'mitLicense')}</span>
+          <span>·</span>
+          <a
+            href={targetRepoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[var(--text-secondary)] hover:text-[var(--accent)] transition-colors"
+          >
+            <span>{t(lang, 'githubLinkLabel')}</span>
+            <ExternalLink className="w-3 h-3" strokeWidth={1.85} />
+          </a>
+        </footer>
       </div>
 
       {/* Mobile Bottom 4-Tab Navigation (< md) with iOS Safe-Area Inset */}
@@ -679,6 +822,7 @@ export function App() {
           categories={categories}
           profiles={profiles}
           user={user}
+          smtpConfigured={smtpConfigured}
           lang={lang}
           onClose={() => setSelectedDeviceId(null)}
           onDeviceUpdated={(updated) => {

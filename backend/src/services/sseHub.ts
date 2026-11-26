@@ -168,6 +168,15 @@ export class SseHub {
     }
   }
 
+  broadcastProfilesChanged(): void {
+    const event: SseEvent = { type: 'profiles_changed' };
+    for (const [id, client] of this.clients.entries()) {
+      if (!this.writeEvent(client.res, event)) {
+        this.clients.delete(id);
+      }
+    }
+  }
+
   closeAll(): void {
     clearInterval(this.heartbeatTimer);
     for (const client of this.clients.values()) {

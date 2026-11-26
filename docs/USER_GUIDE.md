@@ -1,53 +1,38 @@
-# Benutzer- & Administrationshandbuch – LoRaPulse (`v0.0.1`)
+# Benutzer- & Administrationshandbuch – LoRaPulse (`v0.0.2`)
 
 ---
 
-## 1. Erst-Einrichtung & Anmeldung
+## 1. Anmeldung, Passwort-Reset & App-Installation
 
-1. **Erster Systemstart (`SUPER_ADMIN`):**
-   - Beim ersten Start einer leeren Instanz zeigt LoRaPulse automatisch den **Erst-Einrichtungs-Assistenten**.
-   - Den benötigten einmaligen `SETUP_TOKEN` findest du im Server-Log (`docker compose logs lorapulse`). Nach dem Anlegen des ersten `SUPER_ADMIN`-Kontos wird dieser Setup-Zugang dauerhaft geschlossen.
-2. **Einladung neuer Benutzer:**
-   - Öffentliche Registrierungen sind aus Sicherheitsgründen deaktiviert.
-   - Administratoren erzeugen unter **Verwaltung -> Benutzer & Rechte** einen **Einmal-Einladungslink** (`/invite/...`), über den neue Nutzer ihr eigenes Passwort festlegen.
-3. **Sprache & Darstellung:**
-   - Oben rechts im Header lässt sich jederzeit zwischen **Deutsch (`DE`) & Englisch (`EN`)** sowie zwischen **Dark Mode** (Nachteinsatz) und **Light Mode** (Sonnenlicht im Außenbereich) wechseln.
-4. **Installation als App auf dem iPhone / Smartphone (PWA):**
-   - Öffne deine LoRaPulse-HTTPS-Adresse in **Safari** (iOS) -> tippe auf **Teilen** -> **Zum Home-Bildschirm**. Dadurch startet LoRaPulse im Vollbildmodus wie eine native App.
+- **Anmeldung & Passwort vergessen:** Ist durch den Super-Admin ein Mailserver eingerichtet, erscheint auf der Anmeldemaske automatisch *„Passwort vergessen?"*. Darüber erhältst du einen 30 Minuten gültigen Einmal-Link zum Festlegen eines neuen Passworts.
+- **Installation am Smartphone & Laptop (wichtig für Push-Benachrichtigungen):**
+  - **iPhone / iPad (ab iOS 16.4):** In Safari öffnen -> *Teilen* -> *Zum Home-Bildschirm* -> installierte App vom Home-Bildschirm starten.
+  - **Android & Laptop (Windows / macOS / Linux):** Direkt im Browser (Chrome, Edge, Firefox, Safari) oder über das *App installieren*-Symbol in der Adressleiste nutzbar.
 
 ---
 
-## 2. Übersicht, Sensoren & Alarme
+## 2. Push- & E-Mail-Benachrichtigungen einrichten
 
-- **Übersicht:** Zeigt auf einen Blick die wichtigsten Kennzahlen, offene Alarme und alle für dich freigegebenen Sensoren in Echtzeit (ohne Neuladen der Seite).
-- **Alarme quittieren:** Benutzer ab Berechtigungsstufe `OPERATOR` können offene Meldungen (z. B. ausgelöster Kontakt an `DS03A-LB` oder Temperatur-Schwellwert an `D20-LB`) direkt quittieren – alle anderen berechtigten Personen sehen sofort, wer die Meldung übernommen hat.
-- **Sensor-Details & Export:** Ein Klick auf eine Sensorkachel öffnet das Zeitreihen-Diagramm (`24h`, `7d`, `30d`), Empfangswerte (`RSSI`, `SNR`, `SF`), die Li-SOCl₂-Batteriebewertung sowie den **CSV- und JSON-Export**.
-
----
-
-## 3. OpenStreetMap-Kartenansicht
-
-- Im Tab **Karte** erscheinen automatisch alle für dich freigegebenen Sensoren, für die GPS-Koordinaten hinterlegt sind (umschaltbar zwischen **OpenStreetMap** und **OpenTopoMap** mit Höhenlinien).
-- Sensoren ohne Koordinaten werden oberhalb der Karte als Hinweis aufgeführt.
-- Berechtigte Administratoren können Koordinaten direkt draußen bei der Montage über **Smartphone-GPS übernehmen** oder per Klick-Modus auf der Karte setzen.
+1. **Geräte für Web-Push aktivieren (Handy & Laptop parallel):**
+   - Öffne **Verwaltung -> Profil & Benachrichtigungen** auf deinem Handy **und** auf deinem Laptop und klicke jeweils auf **Push auf diesem Gerät aktivieren**.
+   - Über **Test-Push senden** prüfst du sofort, ob beide Geräte benachrichtigt werden.
+2. **Individuelle Einstellung pro Sensor:**
+   - Öffne einen beliebigen Sensor: Dort legst du **persönlich für dein Konto** fest, wie du bei diesem Sensor benachrichtigt wirst:
+     - **Push-Benachrichtigung:** Standardmäßig **Aktiviert**.
+     - **E-Mail-Benachrichtigung:** Standardmäßig **Deaktiviert** (jederzeit pro Sensor zuschaltbar).
+     - **Favorit (Stern):** Pinnt wichtige Sensoren auf der Startseite direkt unter eventuellen Alarmen ganz oben an.
 
 ---
 
-## 4. Kategorien, Gruppen & Einzel-Sensor-Freigaben (`ADMIN` & `SUPER_ADMIN`)
+## 3. Wartungsmodus, Offline-Überwachung & Automatische Entwarnung
 
-- **Optionale Strukturen:** Sensoren dürfen dauerhaft **Ohne Kategorie** bleiben, und Benutzer müssen **keiner Gruppe** angehören.
-- **Kategorie-Vererbung:** Ein Recht auf eine Oberkategorie (z. B. `Fallenmelder -> Langen`) gilt automatisch für alle darunterliegenden Unterkategorien (`Jagdgruppe Langen 1`).
-- **Einzel-Sensor-Freigabe:** Du kannst einem Nutzer gezielt Zugriff auf einen einzelnen Sensor geben (z. B. eine einzelne Wetterstation), ohne dass dieser Nutzer andere Sensoren aus derselben Kategorie sieht.
-- **Visueller JSON-Feld-Mapper:** Unter **Verwaltung -> JSON-Mapper** lassen sich beliebige weitere LoRaWAN-Sensoren anhand ihres empfangenen TTN-Payloads per Klick konfigurieren (inkl. Live-Kachelvorschau und Filterung ungültiger Sondenwerte wie `-999`).
+- **Wartungsmodus (ab `OPERATOR`):** Arbeitest du vor Ort an einem Sensor, Tor oder Melder, wähle im Sensor-Dialog z. B. *Wartungsmodus: 1 Std.* – währenddessen werden Messwerte weiter aufgezeichnet, aber keine Fehlalarme per Push oder E-Mail versendet.
+- **Offline-Watchdog:** Meldet sich ein Sensor länger als das Dreifache seines erwarteten Meldeintervalls nicht mehr, markiert LoRaPulse ihn automatisch als *Offline* und löst eine Meldung aus.
+- **Automatische Entwarnung:** Sobald ein Kontakt wieder schließt, ein Grenzwert wieder eingehalten wird oder ein überfälliger Sensor wieder funkt, wird der offene Alarm automatisch als *Behoben* geschlossen.
 
 ---
 
-## 5. TTN-Anbindung, Downlinks & Systemsteuerung (`SUPER_ADMIN`)
+## 4. Profile löschen & Mailserver einrichten (`ADMIN` / `SUPER_ADMIN`)
 
-- **TTN-Application verbinden:**
-  1. Erstelle in deiner TTN-Application unter *API keys* einen Schlüssel mit den Rechten **Read application traffic** und (für Intervall-Änderungen) **Write downlink application traffic**.
-  2. Trage unter **Verwaltung -> TTN & Server** die `Application ID` (z. B. `mein-projekt`), den Host (`eu1.cloud.thethings.network`), Port `8883` (`TLS` aktiv) und den API-Key ein.
-  3. Sobald ein Sensor funkt, legt LoRaPulse ihn automatisch an und wählt für `DS03A-LB` und `D20-LB` direkt das passende Profil.
-- **Sendeintervall per LoRaWAN-Downlink ändern:**
-  - Im Sensor-Detailfenster kann ausschließlich ein `SUPER_ADMIN` ein neues Sendeintervall einreihen.
-  - *Wichtig bei Batterie-Sensoren (Class A):* Der Befehl wird in TTN per `down/replace` hinterlegt (`Status: QUEUED`) und automatisch übertragen, sobald der Sensor das nächste Mal regulär Daten sendet (`Status: SENT`).
+- **Eigene Sensor-Profile löschen:** Unter **Verwaltung -> JSON-Feld-Mapper** lassen sich selbst angelegte Profile löschen. Sensoren, die dieses Profil noch genutzt haben, werden dabei automatisch verlustfrei auf das Standard-JSON-Profil umgestellt.
+- **SMTP-Mailserver (`SUPER_ADMIN`):** Unter **Verwaltung -> TTN, E-Mail & System** hinterlegst du Host, Port, TLS/STARTTLS und Zugangsdaten deines Mailservers (verschlüsselt gespeichert) und prüfst den Versand per **Test-E-Mail**.

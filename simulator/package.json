@@ -1,6 +1,6 @@
 {
   "name": "@lorapulse/simulator",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -11,7 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@lorapulse/shared": "0.0.1",
+    "@lorapulse/shared": "0.0.2",
     "aedes": "^0.51.3",
     "mqtt": "^5.10.3"
   },

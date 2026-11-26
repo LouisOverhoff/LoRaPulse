@@ -1,3 +1,4 @@
+import { APP_VERSION } from '@lorapulse/shared';
 import { createApp } from './app.js';
 
 async function main(): Promise<void> {
@@ -30,7 +31,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
   await app.listen({ port, host });
-  console.info(`[LoRaPulse] Server v0.0.1 listening on http://${host}:${port}`);
+  console.info(`[LoRaPulse] Server v${APP_VERSION} listening on http://${host}:${port}`);
 }
 
 main().catch((err) => {

@@ -61,7 +61,7 @@ test('LoRaPulse v0.0.1 – Full End-to-End Integration, TTN Simulator, Downlink 
     // 1. Health & Static Built PWA Verification
     const healthRes = await app.inject({ method: 'GET', url: '/api/health' });
     assert.equal(healthRes.statusCode, 200);
-    assert.equal(healthRes.json().version, '0.0.1');
+    assert.equal(healthRes.json().version, '0.0.2');
 
     const indexHtmlRes = await app.inject({ method: 'GET', url: '/' });
     assert.equal(indexHtmlRes.statusCode, 200);

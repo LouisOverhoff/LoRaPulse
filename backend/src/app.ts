@@ -12,17 +12,26 @@ import { z, ZodError } from 'zod';
 import {
   APP_VERSION,
   BUILTIN_SENSOR_PROFILES,
+  ConfirmPasswordResetSchema,
   CreateCategorySchema,
   CreateGroupSchema,
   CreateInviteUserSchema,
   CreatePermissionSchema,
   CreateTtnApplicationSchema,
+  DEFAULT_USER_DEVICE_PREFERENCE,
+  GITHUB_REPO_URL,
   LoginSchema,
   QueueDownlinkSchema,
   RedeemInviteSchema,
+  RegisterPushSubscriptionSchema,
+  RequestPasswordResetSchema,
   SaveSensorProfileSchema,
+  SaveSmtpSettingsSchema,
+  SetDeviceMaintenanceSchema,
   SetupBootstrapSchema,
+  TestSmtpSchema,
   UpdateDeviceSchema,
+  UpdateDeviceUserPreferenceSchema,
   type AlertItem,
   type AuditLogItem,
   type AuthBootstrapStatus,
@@ -61,6 +70,11 @@ import {
   verifyPassword,
 } from './security/crypto.js';
 import {
+  NotificationDispatcher,
+  type CustomMailSender,
+  type CustomPushSender,
+} from './services/notifications.js';
+import {
   buildUserAccessContext,
   canAckAlert,
   canEditDevice,
@@ -77,12 +91,15 @@ import {
   type UserRow,
 } from './services/permissions.js';
 import { SseHub } from './services/sseHub.js';
+import { OfflineWatchdog } from './services/watchdog.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
     db: DbClient;
     sseHub: SseHub;
     ttnManager: TtnMqttManager;
+    notifications: NotificationDispatcher;
+    runOfflineWatchdogSweep: () => Promise<number>;
   }
   interface FastifyRequest {
     authUser: UserSummary | null;
@@ -96,11 +113,15 @@ export interface CreateAppOptions {
   cookieSecure?: boolean;
   enableDemo?: boolean;
   logger?: boolean;
+  watchdogIntervalMs?: number;
+  customMailSender?: CustomMailSender;
+  customPushSender?: CustomPushSender;
 }
 
 const SESSION_COOKIE_NAME = 'lp_session';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 14; // 14 days
 const INVITE_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+const PASSWORD_RESET_TTL_MS = 1000 * 60 * 30; // 30 minutes
 
 const UpdatePreferencesSchema = z.object({
   preferredLang: z.enum(['de', 'en']).optional(),
@@ -193,21 +214,35 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
   let activeSetupToken: string | null = onboarding.setupToken;
 
   const sseHub = new SseHub(db);
-  const ttnManager = new TtnMqttManager(db, sseHub);
+  const notifications = new NotificationDispatcher(db, {
+    customMailSender: options.customMailSender,
+    customPushSender: options.customPushSender,
+  });
+  const ttnManager = new TtnMqttManager(db, sseHub, notifications);
+  const watchdog = new OfflineWatchdog(
+    db,
+    sseHub,
+    notifications,
+    options.watchdogIntervalMs ?? 30_000
+  );
 
   let demoHandle: EmbeddedDemoHandle | null = null;
   if (enableDemo) {
     demoHandle = await startEmbeddedDemo(db, ttnManager);
   }
   await ttnManager.startAll();
+  watchdog.start();
 
   app.decorate('db', db);
   app.decorate('sseHub', sseHub);
   app.decorate('ttnManager', ttnManager);
+  app.decorate('notifications', notifications);
+  app.decorate('runOfflineWatchdogSweep', () => watchdog.runSweep());
   app.decorateRequest('authUser', null);
   app.decorateRequest('authSessionId', null);
 
   app.addHook('onClose', async () => {
+    watchdog.stop();
     sseHub.closeAll();
     await ttnManager.closeAll();
     if (demoHandle) {
@@ -374,19 +409,181 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
   }));
 
   app.get('/api/auth/status', async (request): Promise<AuthBootstrapStatus> => {
-    const countRes = await db.query<{ count: string | number }>(
-      'SELECT COUNT(*) AS count FROM users'
-    );
+    const [countRes, smtpConfigured, vapidPublicKey] = await Promise.all([
+      db.query<{ count: string | number }>('SELECT COUNT(*) AS count FROM users'),
+      notifications.isSmtpActive(),
+      notifications.getVapidPublicKey(),
+    ]);
     const needsSetup = Number(countRes.rows[0]?.count ?? 0) === 0;
 
     return {
       appName: process.env.APP_NAME || 'LoRaPulse',
       version: APP_VERSION,
+      repoUrl: GITHUB_REPO_URL,
       needsSetup,
       demoMode: enableDemo,
+      smtpConfigured,
+      vapidPublicKey,
       user: request.authUser ?? null,
     };
   });
+
+  app.post(
+    '/api/auth/password-reset/request',
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      const body = RequestPasswordResetSchema.parse(request.body);
+      const smtpActive = await notifications.isSmtpActive();
+      if (!smtpActive) {
+        return reply.code(400).send({ error: 'SMTP email service is not configured or disabled' });
+      }
+
+      const email = body.email.trim().toLowerCase();
+      const userRes = await db.query<UserRow>(
+        'SELECT * FROM users WHERE LOWER(email) = $1 AND is_active = TRUE LIMIT 1',
+        [email]
+      );
+      const targetUser = userRes.rows[0];
+
+      if (targetUser) {
+        const rawToken = generateRandomToken(32);
+        const tokenHash = hashToken(rawToken);
+        const expiresIso = new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString();
+
+        await db.query(
+          `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at)
+           VALUES ($1, $2, $3, $4)`,
+          [randomUUID(), targetUser.id, tokenHash, expiresIso]
+        );
+
+        const baseUrl = await notifications.resolvePublicBaseUrl(
+          `${request.protocol}://${request.hostname}`
+        );
+        const resetUrl = `${baseUrl}/reset-password/${rawToken}`;
+
+        await notifications.sendPasswordResetEmail({
+          to: targetUser.email,
+          displayName: targetUser.display_name,
+          resetUrl,
+          lang: body.lang ?? targetUser.preferred_lang,
+        });
+
+        await writeAuditLog(db, {
+          actorEmail: targetUser.email,
+          actorRole: targetUser.system_role,
+          action: 'PASSWORD_RESET_REQUESTED',
+          targetType: 'USER',
+          targetId: targetUser.id,
+          ipAddress: request.ip,
+        });
+      } else {
+        await writeAuditLog(db, {
+          actorEmail: email,
+          actorRole: 'ANONYMOUS',
+          action: 'PASSWORD_RESET_REQUESTED',
+          targetType: 'USER',
+          details: { userFound: false },
+          ipAddress: request.ip,
+        });
+      }
+
+      return { ok: true };
+    }
+  );
+
+  app.get<{ Params: { token: string } }>(
+    '/api/auth/password-reset/:token',
+    async (request) => {
+      const rawToken = (request.params.token ?? '').trim();
+      if (rawToken.length < 16) {
+        return { valid: false };
+      }
+
+      const tokenHash = hashToken(rawToken);
+      const res = await db.query<{ email: string }>(
+        `SELECT u.email
+         FROM password_reset_tokens r
+         JOIN users u ON u.id = r.user_id
+         WHERE r.token_hash = $1
+           AND r.used_at IS NULL
+           AND r.expires_at > NOW()
+           AND u.is_active = TRUE
+         LIMIT 1`,
+        [tokenHash]
+      );
+
+      const row = res.rows[0];
+      if (!row) {
+        return { valid: false };
+      }
+      return {
+        valid: true,
+        email: row.email,
+      };
+    }
+  );
+
+  app.post(
+    '/api/auth/password-reset/confirm',
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      const body = ConfirmPasswordResetSchema.parse(request.body);
+      const tokenHash = hashToken(body.token.trim());
+
+      const res = await db.query<{
+        reset_id: string;
+        user_id: string;
+        email: string;
+        system_role: string;
+      }>(
+        `SELECT r.id AS reset_id, u.id AS user_id, u.email, u.system_role
+         FROM password_reset_tokens r
+         JOIN users u ON u.id = r.user_id
+         WHERE r.token_hash = $1
+           AND r.used_at IS NULL
+           AND r.expires_at > NOW()
+           AND u.is_active = TRUE
+         LIMIT 1`,
+        [tokenHash]
+      );
+
+      const row = res.rows[0];
+      if (!row) {
+        return reply.code(400).send({ error: 'Password reset token is invalid or expired' });
+      }
+
+      const pwHash = await hashPassword(body.newPassword);
+
+      await db.query(
+        `UPDATE users
+         SET password_hash = $1,
+             must_change_password = FALSE
+         WHERE id = $2`,
+        [pwHash, row.user_id]
+      );
+
+      await db.query(
+        `UPDATE password_reset_tokens
+         SET used_at = NOW()
+         WHERE user_id = $1 AND used_at IS NULL`,
+        [row.user_id]
+      );
+
+      await db.query('DELETE FROM sessions WHERE user_id = $1', [row.user_id]);
+      sseHub.disconnectUser(row.user_id);
+
+      await writeAuditLog(db, {
+        actorEmail: row.email,
+        actorRole: row.system_role,
+        action: 'PASSWORD_RESET_COMPLETED',
+        targetType: 'USER',
+        targetId: row.user_id,
+        ipAddress: request.ip,
+      });
+
+      return { ok: true };
+    }
+  );
 
   app.post(
     '/api/auth/setup',
@@ -971,6 +1168,123 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     return { device };
   });
 
+  app.put<{ Params: { id: string } }>(
+    '/api/devices/:id/preferences',
+    async (request, reply) => {
+      const authUser = requireAuth(request, reply);
+      if (!authUser) return;
+
+      const { exists, access } = await getEffectiveAccessForDevice(
+        db,
+        authUser,
+        request.params.id
+      );
+      if (!access) {
+        if (!exists && (authUser.systemRole === 'SUPER_ADMIN' || authUser.systemRole === 'ADMIN')) {
+          return reply.code(404).send({ error: 'Device not found' });
+        }
+        return reply.code(403).send({ error: 'Access denied' });
+      }
+
+      const body = UpdateDeviceUserPreferenceSchema.parse(request.body);
+
+      const curRes = await db.query<{
+        push_enabled: boolean;
+        email_enabled: boolean;
+        is_favorite: boolean;
+      }>(
+        `SELECT push_enabled, email_enabled, is_favorite
+         FROM user_device_preferences
+         WHERE user_id = $1 AND device_id = $2
+         LIMIT 1`,
+        [authUser.id, request.params.id]
+      );
+      const cur = curRes.rows[0];
+
+      const nextPush =
+        body.pushEnabled ??
+        (cur ? Boolean(cur.push_enabled) : DEFAULT_USER_DEVICE_PREFERENCE.pushEnabled);
+      const nextEmail =
+        body.emailEnabled ??
+        (cur ? Boolean(cur.email_enabled) : DEFAULT_USER_DEVICE_PREFERENCE.emailEnabled);
+      const nextFavorite =
+        body.isFavorite ??
+        (cur ? Boolean(cur.is_favorite) : DEFAULT_USER_DEVICE_PREFERENCE.isFavorite);
+
+      await db.query(
+        `INSERT INTO user_device_preferences (
+           user_id, device_id, push_enabled, email_enabled, is_favorite, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (user_id, device_id) DO UPDATE SET
+           push_enabled = EXCLUDED.push_enabled,
+           email_enabled = EXCLUDED.email_enabled,
+           is_favorite = EXCLUDED.is_favorite,
+           updated_at = NOW()`,
+        [authUser.id, request.params.id, nextPush, nextEmail, nextFavorite]
+      );
+
+      await sseHub.broadcastDeviceUpdated(request.params.id);
+      const device = await loadSingleDeviceViewForUser(db, authUser, request.params.id);
+      return { device };
+    }
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/devices/:id/maintenance',
+    async (request, reply) => {
+      const authUser = requireAuth(request, reply);
+      if (!authUser) return;
+
+      const { exists, access } = await getEffectiveAccessForDevice(
+        db,
+        authUser,
+        request.params.id
+      );
+      if (!exists) {
+        if (authUser.systemRole === 'SUPER_ADMIN' || authUser.systemRole === 'ADMIN') {
+          return reply.code(404).send({ error: 'Device not found' });
+        }
+        return reply.code(403).send({ error: 'Access denied' });
+      }
+      if (!canEditDevice(access)) {
+        return reply
+          .code(403)
+          .send({ error: 'OPERATOR or higher permission required to manage maintenance mode' });
+      }
+
+      const body = SetDeviceMaintenanceSchema.parse(request.body);
+      const maintenanceUntilIso =
+        body.durationMinutes !== null && body.durationMinutes > 0
+          ? new Date(Date.now() + body.durationMinutes * 60_000).toISOString()
+          : null;
+
+      await db.query('UPDATE devices SET maintenance_until = $1 WHERE id = $2', [
+        maintenanceUntilIso,
+        request.params.id,
+      ]);
+
+      await recomputeAndPersistDeviceStatus(db, request.params.id);
+
+      await writeAuditLog(db, {
+        actorEmail: authUser.email,
+        actorRole: authUser.systemRole,
+        action: maintenanceUntilIso ? 'DEVICE_MAINTENANCE_ENABLED' : 'DEVICE_MAINTENANCE_DISABLED',
+        targetType: 'DEVICE',
+        targetId: request.params.id,
+        details: {
+          durationMinutes: body.durationMinutes,
+          maintenanceUntil: maintenanceUntilIso,
+        },
+        ipAddress: request.ip,
+      });
+
+      await sseHub.broadcastDeviceUpdated(request.params.id);
+      const device = await loadSingleDeviceViewForUser(db, authUser, request.params.id);
+      return { device };
+    }
+  );
+
   app.post<{ Params: { id: string } }>('/api/devices/:id/downlink', async (request, reply) => {
     // STRICTLY SUPER_ADMIN ONLY!
     const superAdmin = requireSuperAdmin(request, reply);
@@ -1211,11 +1525,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
     await db.query(
       `INSERT INTO sensor_profiles (
-         id, name, brand, model, icon, battery_chemistry, downlink_interval_codec, is_built_in, fields_json
+         id, name, localized_name_json, brand, model, icon, battery_chemistry, downlink_interval_codec, is_built_in, fields_json
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8::jsonb)
+       VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, FALSE, $9::jsonb)
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name,
+         localized_name_json = EXCLUDED.localized_name_json,
          brand = EXCLUDED.brand,
          model = EXCLUDED.model,
          icon = EXCLUDED.icon,
@@ -1226,6 +1541,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       [
         body.id,
         body.name.trim(),
+        body.localizedName ? JSON.stringify(body.localizedName) : null,
         body.brand.trim(),
         body.model.trim(),
         body.icon,
@@ -1238,6 +1554,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     const profile: SensorProfile = {
       id: body.id,
       name: body.name.trim(),
+      ...(body.localizedName ? { localizedName: body.localizedName } : {}),
       brand: body.brand.trim(),
       model: body.model.trim(),
       icon: body.icon,
@@ -1257,7 +1574,127 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ipAddress: request.ip,
     });
 
+    sseHub.broadcastProfilesChanged();
     return { profile };
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/profiles/:id', async (request, reply) => {
+    const adminUser = requireAdmin(request, reply);
+    if (!adminUser) return;
+
+    const profileId = request.params.id.trim();
+    if (BUILTIN_SENSOR_PROFILES.some((p) => p.id === profileId)) {
+      return reply.code(400).send({ error: 'Built-in sensor profiles cannot be deleted' });
+    }
+
+    const existingRes = await db.query<{ id: string; name: string; is_built_in: boolean }>(
+      'SELECT id, name, is_built_in FROM sensor_profiles WHERE id = $1 LIMIT 1',
+      [profileId]
+    );
+    const existing = existingRes.rows[0];
+    if (!existing) {
+      return reply.code(404).send({ error: 'Sensor profile not found' });
+    }
+    if (existing.is_built_in) {
+      return reply.code(400).send({ error: 'Built-in sensor profiles cannot be deleted' });
+    }
+
+    const reassignRes = await db.query<{ id: string }>(
+      `UPDATE devices
+       SET sensor_profile_id = 'generic_json'
+       WHERE sensor_profile_id = $1
+       RETURNING id`,
+      [profileId]
+    );
+    const reassignedDevices = reassignRes.rows.length;
+
+    await db.query('DELETE FROM sensor_profiles WHERE id = $1 AND is_built_in = FALSE', [
+      profileId,
+    ]);
+
+    await writeAuditLog(db, {
+      actorEmail: adminUser.email,
+      actorRole: adminUser.systemRole,
+      action: 'PROFILE_DELETED',
+      targetType: 'PROFILE',
+      targetId: profileId,
+      details: { name: existing.name, reassignedDevices },
+      ipAddress: request.ip,
+    });
+
+    sseHub.broadcastProfilesChanged();
+    for (const row of reassignRes.rows) {
+      await sseHub.broadcastDeviceUpdated(row.id);
+    }
+
+    return { ok: true, reassignedDevices };
+  });
+
+  // =========================================================================
+  // 4b. Web-Push Subscriptions (Authenticated User)
+  // =========================================================================
+
+  app.get('/api/push/subscriptions', async (request, reply) => {
+    const authUser = requireAuth(request, reply);
+    if (!authUser) return;
+
+    const [subscriptions, vapidPublicKey] = await Promise.all([
+      notifications.listUserSubscriptions(authUser.id),
+      notifications.getVapidPublicKey(),
+    ]);
+    return { subscriptions, vapidPublicKey };
+  });
+
+  app.post('/api/push/subscriptions', async (request, reply) => {
+    const authUser = requireAuth(request, reply);
+    if (!authUser) return;
+
+    const body = RegisterPushSubscriptionSchema.parse(request.body);
+    const subscription = await notifications.registerSubscription(authUser.id, body);
+
+    await writeAuditLog(db, {
+      actorEmail: authUser.email,
+      actorRole: authUser.systemRole,
+      action: 'PUSH_SUBSCRIPTION_REGISTERED',
+      targetType: 'PUSH_SUBSCRIPTION',
+      targetId: subscription.id,
+      details: { deviceLabel: subscription.deviceLabel },
+      ipAddress: request.ip,
+    });
+
+    return { subscription };
+  });
+
+  app.delete<{ Params: { id: string } }>(
+    '/api/push/subscriptions/:id',
+    async (request, reply) => {
+      const authUser = requireAuth(request, reply);
+      if (!authUser) return;
+
+      const deleted = await notifications.deleteSubscription(authUser.id, request.params.id);
+      if (!deleted) {
+        return reply.code(404).send({ error: 'Push subscription not found' });
+      }
+
+      await writeAuditLog(db, {
+        actorEmail: authUser.email,
+        actorRole: authUser.systemRole,
+        action: 'PUSH_SUBSCRIPTION_DELETED',
+        targetType: 'PUSH_SUBSCRIPTION',
+        targetId: request.params.id,
+        ipAddress: request.ip,
+      });
+
+      return { ok: true };
+    }
+  );
+
+  app.post('/api/push/test', async (request, reply) => {
+    const authUser = requireAuth(request, reply);
+    if (!authUser) return;
+
+    const sentCount = await notifications.sendTestPush(authUser);
+    return { sentCount };
   });
 
   // =========================================================================
@@ -1336,13 +1773,37 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       [randomUUID(), userId, inviteHash, expiresIso]
     );
 
+    const invitePath = `/invite/${rawInviteToken}`;
+    let emailSent = false;
+    let resolvedInviteUrl = invitePath;
+
+    if (body.sendEmail && (await notifications.isSmtpActive())) {
+      const baseUrl = await notifications.resolvePublicBaseUrl(
+        `${request.protocol}://${request.hostname}`
+      );
+      resolvedInviteUrl = `${baseUrl}${invitePath}`;
+      try {
+        await notifications.sendInviteEmail({
+          to: email,
+          displayName: body.displayName.trim(),
+          systemRole: body.systemRole,
+          inviteUrl: resolvedInviteUrl,
+          invitedBy: adminUser.displayName,
+          lang: adminUser.preferredLang,
+        });
+        emailSent = true;
+      } catch (err) {
+        console.error('[LoRaPulse][SMTP] Failed sending invite email:', err);
+      }
+    }
+
     await writeAuditLog(db, {
       actorEmail: adminUser.email,
       actorRole: adminUser.systemRole,
       action: 'USER_INVITED',
       targetType: 'USER',
       targetId: userId,
-      details: { email, systemRole: body.systemRole, groupIds: body.groupIds },
+      details: { email, systemRole: body.systemRole, groupIds: body.groupIds, emailSent },
       ipAddress: request.ip,
     });
 
@@ -1351,9 +1812,10 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       user,
       token: rawInviteToken,
       inviteToken: rawInviteToken,
-      invitePath: `/invite/${rawInviteToken}`,
-      inviteUrl: `/invite/${rawInviteToken}`,
+      invitePath,
+      inviteUrl: resolvedInviteUrl,
       expiresAt: expiresIso,
+      emailSent,
     };
   });
 
@@ -1745,6 +2207,71 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       targetType: 'TTN_APPLICATION',
       targetId: request.params.id,
       details: { ttnAppId: delRes.rows[0].ttn_app_id },
+      ipAddress: request.ip,
+    });
+
+    return { ok: true };
+  });
+
+  app.get('/api/super/smtp', async (request, reply) => {
+    const superAdmin = requireSuperAdmin(request, reply);
+    if (!superAdmin) return;
+
+    const smtp = await notifications.getSmtpSummary();
+    return { smtp };
+  });
+
+  app.put('/api/super/smtp', async (request, reply) => {
+    const superAdmin = requireSuperAdmin(request, reply);
+    if (!superAdmin) return;
+
+    const body = SaveSmtpSettingsSchema.parse(request.body);
+    const smtp = await notifications.saveSmtpSettings(body);
+
+    await writeAuditLog(db, {
+      actorEmail: superAdmin.email,
+      actorRole: superAdmin.systemRole,
+      action: 'SMTP_SETTINGS_SAVED',
+      targetType: 'SYSTEM',
+      targetId: 'smtp_settings',
+      details: {
+        enabled: smtp.enabled,
+        host: smtp.host,
+        port: smtp.port,
+        secure: smtp.secure,
+        username: smtp.username,
+        fromEmail: smtp.fromEmail,
+        publicBaseUrl: smtp.publicBaseUrl,
+      },
+      ipAddress: request.ip,
+    });
+
+    return { smtp };
+  });
+
+  app.post('/api/super/smtp/test', async (request, reply) => {
+    const superAdmin = requireSuperAdmin(request, reply);
+    if (!superAdmin) return;
+
+    const body = TestSmtpSchema.parse(request.body);
+    if (!(await notifications.isSmtpActive())) {
+      return reply.code(400).send({ error: 'SMTP is not configured or disabled' });
+    }
+
+    try {
+      await notifications.sendTestEmail(body.recipientEmail.trim(), superAdmin.preferredLang);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'SMTP test delivery failed';
+      return reply.code(502).send({ error: `SMTP delivery failed: ${msg}` });
+    }
+
+    await writeAuditLog(db, {
+      actorEmail: superAdmin.email,
+      actorRole: superAdmin.systemRole,
+      action: 'SMTP_TEST_SENT',
+      targetType: 'SYSTEM',
+      targetId: 'smtp_settings',
+      details: { recipientEmail: body.recipientEmail.trim() },
       ipAddress: request.ip,
     });
 

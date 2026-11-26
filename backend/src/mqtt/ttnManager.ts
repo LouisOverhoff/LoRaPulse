@@ -23,6 +23,7 @@ import {
   type DbClient,
 } from '../db/client.js';
 import { decryptSecret } from '../security/crypto.js';
+import type { NotificationDispatcher } from '../services/notifications.js';
 import { loadAllSensorProfiles } from '../services/permissions.js';
 import type { SseHub } from '../services/sseHub.js';
 
@@ -49,6 +50,7 @@ interface DeviceDbRow {
   dev_eui: string;
   ttn_device_id: string;
   name: string;
+  location_label: string | null;
   config_json: unknown;
   latest_values_json: unknown;
   raw_latest_payload_json: unknown;
@@ -59,6 +61,7 @@ interface DeviceDbRow {
   spreading_factor: string | null;
   status: string;
   last_seen_at: unknown;
+  maintenance_until: unknown;
   pending_downlink_json: unknown;
 }
 
@@ -160,6 +163,12 @@ function isContactRawOpen(rawVal: unknown): boolean {
   return false;
 }
 
+export function isDeviceInMaintenance(maintenanceUntil: unknown): boolean {
+  const iso = toIsoOrNull(maintenanceUntil);
+  if (!iso) return false;
+  return new Date(iso).getTime() > Date.now();
+}
+
 export async function recomputeAndPersistDeviceStatus(
   db: DbClient,
   deviceId: string
@@ -167,8 +176,8 @@ export async function recomputeAndPersistDeviceStatus(
   const [devRes, profiles, openAlertsRes] = await Promise.all([
     db.query<DeviceDbRow>('SELECT * FROM devices WHERE id = $1', [deviceId]),
     loadAllSensorProfiles(db),
-    db.query<{ severity: string }>(
-      `SELECT severity FROM alerts WHERE device_id = $1 AND status = 'OPEN'`,
+    db.query<{ alert_type: string; severity: string }>(
+      `SELECT alert_type, severity FROM alerts WHERE device_id = $1 AND status = 'OPEN'`,
       [deviceId]
     ),
   ]);
@@ -188,11 +197,18 @@ export async function recomputeAndPersistDeviceStatus(
     toNullableNumber(dev.battery_voltage),
     profile.batteryChemistry
   );
+  const inMaintenance = isDeviceInMaintenance(dev.maintenance_until);
 
   let contactAlarmActive = false;
   const contactField = profile.fields.find((f) => f.kind === 'contact');
-  const contactKey = contactField?.key ?? ('DOOR_OPEN_STATUS' in latestValues ? 'DOOR_OPEN_STATUS' : null);
-  if (contactKey && latestValues[contactKey] !== undefined && latestValues[contactKey] !== null) {
+  const contactKey =
+    contactField?.key ?? ('DOOR_OPEN_STATUS' in latestValues ? 'DOOR_OPEN_STATUS' : null);
+  if (
+    !inMaintenance &&
+    contactKey &&
+    latestValues[contactKey] !== undefined &&
+    latestValues[contactKey] !== null
+  ) {
     const rawOpen = isContactRawOpen(latestValues[contactKey]);
     const effectiveOpen = config.invertContact ? !rawOpen : rawOpen;
     if (effectiveOpen && config.alertOnOpen !== false) {
@@ -201,14 +217,26 @@ export async function recomputeAndPersistDeviceStatus(
   }
 
   const hasOpenAlarm = openAlertsRes.rows.some((a) => a.severity === 'ALARM');
-  const hasOpenWarn = openAlertsRes.rows.some((a) => a.severity === 'WARN');
+  const hasOpenOffline = openAlertsRes.rows.some((a) => a.alert_type === 'OFFLINE');
+  const hasOpenNonOfflineWarn = openAlertsRes.rows.some(
+    (a) => a.severity === 'WARN' && a.alert_type !== 'OFFLINE'
+  );
+
+  const lastSeenIso = toIsoOrNull(dev.last_seen_at);
+  const expectedIntervalSec = config.expectedIntervalSec ?? 3600;
+  const isOverdue =
+    !inMaintenance &&
+    lastSeenIso !== null &&
+    Date.now() - new Date(lastSeenIso).getTime() > expectedIntervalSec * 3 * 1000;
 
   let nextStatus: DeviceHealthStatus;
-  if (hasOpenAlarm || contactAlarmActive || batState === 'CRITICAL') {
+  if (hasOpenAlarm || contactAlarmActive || (!inMaintenance && batState === 'CRITICAL')) {
     nextStatus = 'ALARM';
-  } else if (hasOpenWarn || probeErrors.length > 0 || batState === 'LOW') {
+  } else if (isOverdue || (!inMaintenance && hasOpenOffline)) {
+    nextStatus = 'OFFLINE';
+  } else if (hasOpenNonOfflineWarn || probeErrors.length > 0 || batState === 'LOW') {
     nextStatus = 'WARN';
-  } else if (!dev.last_seen_at) {
+  } else if (!lastSeenIso) {
     nextStatus = 'NEW';
   } else {
     nextStatus = 'OK';
@@ -226,7 +254,8 @@ export class TtnMqttManager {
 
   constructor(
     private readonly db: DbClient,
-    private readonly sseHub: SseHub
+    private readonly sseHub: SseHub,
+    private readonly notifications?: NotificationDispatcher
   ) {}
 
   async startAll(): Promise<void> {
@@ -996,9 +1025,15 @@ export class TtnMqttManager {
     }
 
     const batteryState = evaluateBatteryHealth(batteryVoltage, profile.batteryChemistry);
+    const inMaintenance = isDeviceInMaintenance(device.maintenance_until);
 
-    // 6. Evaluate Contact & Temperature Threshold Alerts
+    // 6. Auto-Resolve Recovered Alerts (Idea B) & Evaluate New Alerts (respecting Maintenance Mode Idea C)
     const emittedAlerts: AlertItem[] = [];
+    const newlyCreatedOpenAlerts: AlertItem[] = [];
+
+    // 6.0 Any incoming uplink proves the sensor is alive -> auto-resolve OFFLINE alerts!
+    const resolvedOffline = await this.resolveAlertsByType(device.id, device.name, 'OFFLINE');
+    emittedAlerts.push(...resolvedOffline);
 
     // 6a. Contact Trigger Check (DOOR_OPEN_STATUS or profile contact field)
     const contactField = profile.fields.find((f) => f.kind === 'contact');
@@ -1012,7 +1047,14 @@ export class TtnMqttManager {
       if (contactRaw !== undefined && contactRaw !== null) {
         const rawOpen = isContactRawOpen(contactRaw);
         const effectiveOpen = config.invertContact ? !rawOpen : rawOpen;
-        if (effectiveOpen && config.alertOnOpen !== false) {
+        if (!effectiveOpen) {
+          const resolvedContact = await this.resolveAlertsByType(
+            device.id,
+            device.name,
+            'CONTACT_TRIGGER'
+          );
+          emittedAlerts.push(...resolvedContact);
+        } else if (effectiveOpen && config.alertOnOpen !== false && !inMaintenance) {
           contactCurrentlyOpen = true;
           const created = await this.ensureOpenAlert(device.id, device.name, {
             alertType: 'CONTACT_TRIGGER',
@@ -1020,7 +1062,10 @@ export class TtnMqttManager {
             messageDe: `Kontakt ausgelöst an Sensor „${device.name}“`,
             messageEn: `Contact triggered on sensor "${device.name}"`,
           });
-          if (created) emittedAlerts.push(created);
+          if (created) {
+            emittedAlerts.push(created);
+            newlyCreatedOpenAlerts.push(created);
+          }
         }
       }
     }
@@ -1050,41 +1095,61 @@ export class TtnMqttManager {
       }
 
       if (validTemp !== null) {
-        if (
-          typeof config.tempMaxThreshold === 'number' &&
-          validTemp > config.tempMaxThreshold
-        ) {
-          const created = await this.ensureOpenAlert(device.id, device.name, {
-            alertType: 'THRESHOLD',
-            severity: 'ALARM',
-            messageDe: `Temperatur-Obergrenze überschritten (${validTemp.toFixed(1)} °C > ${config.tempMaxThreshold.toFixed(1)} °C)`,
-            messageEn: `Upper temperature threshold exceeded (${validTemp.toFixed(1)} °C > ${config.tempMaxThreshold.toFixed(1)} °C)`,
-          });
-          if (created) emittedAlerts.push(created);
-        } else if (
-          typeof config.tempMinThreshold === 'number' &&
-          validTemp < config.tempMinThreshold
-        ) {
-          const created = await this.ensureOpenAlert(device.id, device.name, {
-            alertType: 'THRESHOLD',
-            severity: 'ALARM',
-            messageDe: `Temperatur-Untergrenze unterschritten (${validTemp.toFixed(1)} °C < ${config.tempMinThreshold.toFixed(1)} °C)`,
-            messageEn: `Lower temperature threshold breached (${validTemp.toFixed(1)} °C < ${config.tempMinThreshold.toFixed(1)} °C)`,
-          });
-          if (created) emittedAlerts.push(created);
+        const aboveMax =
+          typeof config.tempMaxThreshold === 'number' && validTemp > config.tempMaxThreshold;
+        const belowMin =
+          typeof config.tempMinThreshold === 'number' && validTemp < config.tempMinThreshold;
+
+        if (!aboveMax && !belowMin) {
+          const resolvedThreshold = await this.resolveAlertsByType(
+            device.id,
+            device.name,
+            'THRESHOLD'
+          );
+          emittedAlerts.push(...resolvedThreshold);
+        } else if (!inMaintenance) {
+          if (aboveMax && typeof config.tempMaxThreshold === 'number') {
+            const created = await this.ensureOpenAlert(device.id, device.name, {
+              alertType: 'THRESHOLD',
+              severity: 'ALARM',
+              messageDe: `Temperatur-Obergrenze überschritten (${validTemp.toFixed(1)} °C > ${config.tempMaxThreshold.toFixed(1)} °C)`,
+              messageEn: `Upper temperature threshold exceeded (${validTemp.toFixed(1)} °C > ${config.tempMaxThreshold.toFixed(1)} °C)`,
+            });
+            if (created) {
+              emittedAlerts.push(created);
+              newlyCreatedOpenAlerts.push(created);
+            }
+          } else if (belowMin && typeof config.tempMinThreshold === 'number') {
+            const created = await this.ensureOpenAlert(device.id, device.name, {
+              alertType: 'THRESHOLD',
+              severity: 'ALARM',
+              messageDe: `Temperatur-Untergrenze unterschritten (${validTemp.toFixed(1)} °C < ${config.tempMinThreshold.toFixed(1)} °C)`,
+              messageEn: `Lower temperature threshold breached (${validTemp.toFixed(1)} °C < ${config.tempMinThreshold.toFixed(1)} °C)`,
+            });
+            if (created) {
+              emittedAlerts.push(created);
+              newlyCreatedOpenAlerts.push(created);
+            }
+          }
         }
       }
     }
 
-    // 6c. Critical Battery Alert
-    if (batteryState === 'CRITICAL' && batteryVoltage !== null) {
+    // 6c. Critical Battery Alert (and auto-resolve when healthy again)
+    if (batteryState === 'OK') {
+      const resolvedBat = await this.resolveAlertsByType(device.id, device.name, 'LOW_BATTERY');
+      emittedAlerts.push(...resolvedBat);
+    } else if (batteryState === 'CRITICAL' && batteryVoltage !== null && !inMaintenance) {
       const created = await this.ensureOpenAlert(device.id, device.name, {
         alertType: 'LOW_BATTERY',
         severity: 'ALARM',
         messageDe: `Kritische Batteriespannung (${batteryVoltage.toFixed(2)} V) bei „${device.name}“`,
         messageEn: `Critical battery voltage (${batteryVoltage.toFixed(2)} V) on "${device.name}"`,
       });
-      if (created) emittedAlerts.push(created);
+      if (created) {
+        emittedAlerts.push(created);
+        newlyCreatedOpenAlerts.push(created);
+      }
     }
 
     // 7. Determine Device Status & Persist Measurement + Device Hot-Cache
@@ -1119,7 +1184,10 @@ export class TtnMqttManager {
 
     const probeErrorFields = Array.from(probeErrorSet);
     let nextStatus: DeviceHealthStatus;
-    if (hasOpenAlarm || contactCurrentlyOpen || batteryState === 'CRITICAL') {
+    if (
+      hasOpenAlarm ||
+      (!inMaintenance && (contactCurrentlyOpen || batteryState === 'CRITICAL'))
+    ) {
       nextStatus = 'ALARM';
     } else if (hasOpenWarn || probeErrorFields.length > 0 || batteryState === 'LOW') {
       nextStatus = 'WARN';
@@ -1153,10 +1221,69 @@ export class TtnMqttManager {
       ]
     );
 
+    if (!inMaintenance && this.notifications && newlyCreatedOpenAlerts.length > 0) {
+      for (const created of newlyCreatedOpenAlerts) {
+        await this.notifications.dispatchAlertNotifications(
+          {
+            id: device.id,
+            name: device.name,
+            categoryId: device.category_id,
+            locationLabel: device.location_label ?? null,
+            maintenanceUntil: device.maintenance_until,
+          },
+          created
+        );
+      }
+    }
+
     for (const alert of emittedAlerts) {
       await this.sseHub.broadcastAlertUpdated(alert);
     }
     await this.sseHub.broadcastDeviceUpdated(device.id);
+  }
+
+  private async resolveAlertsByType(
+    deviceId: string,
+    deviceName: string,
+    alertType: AlertItem['alertType']
+  ): Promise<AlertItem[]> {
+    const resolvedAtIso = new Date().toISOString();
+    const res = await this.db.query<{
+      id: string;
+      device_id: string;
+      alert_type: AlertItem['alertType'];
+      severity: AlertItem['severity'];
+      message_de: string;
+      message_en: string;
+      acked_by_name: string | null;
+      acked_at: unknown;
+      resolved_at: unknown;
+      created_at: unknown;
+    }>(
+      `UPDATE alerts
+       SET status = 'RESOLVED',
+           resolved_at = $1
+       WHERE device_id = $2
+         AND alert_type = $3
+         AND status IN ('OPEN', 'ACKED')
+       RETURNING *`,
+      [resolvedAtIso, deviceId, alertType]
+    );
+
+    return res.rows.map((r) => ({
+      id: r.id,
+      deviceId: r.device_id,
+      deviceName,
+      alertType: r.alert_type,
+      severity: r.severity,
+      messageDe: r.message_de,
+      messageEn: r.message_en,
+      status: 'RESOLVED',
+      ackedByName: r.acked_by_name ?? null,
+      ackedAt: toIsoOrNull(r.acked_at),
+      resolvedAt: toIsoOrNull(r.resolved_at) ?? resolvedAtIso,
+      createdAt: toIso(r.created_at),
+    }));
   }
 
   private async ensureOpenAlert(
@@ -1171,7 +1298,7 @@ export class TtnMqttManager {
   ): Promise<AlertItem | null> {
     const existing = await this.db.query<{ id: string }>(
       `SELECT id FROM alerts
-       WHERE device_id = $1 AND alert_type = $2 AND status = 'OPEN'
+       WHERE device_id = $1 AND alert_type = $2 AND status IN ('OPEN', 'ACKED')
        LIMIT 1`,
       [deviceId, input.alertType]
     );
@@ -1200,6 +1327,7 @@ export class TtnMqttManager {
       status: 'OPEN',
       ackedByName: null,
       ackedAt: null,
+      resolvedAt: null,
       createdAt: toIso(res.rows[0]?.created_at),
     };
   }

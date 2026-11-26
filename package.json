@@ -1,9 +1,13 @@
 {
   "name": "lorapulse",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "LoRaPulse – Self-Hosted Multi-Sensor LoRaWAN PWA",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LouisOverhoff/LoRaPulse.git"
+  },
   "workspaces": [
     "packages/shared",
     "backend",

@@ -28,7 +28,10 @@ export function isAdminOrSuper(user: UserSummary | null): boolean {
   return user?.systemRole === 'SUPER_ADMIN' || user?.systemRole === 'ADMIN';
 }
 
-export function canAckAccess(access: EffectiveAccess | undefined, user: UserSummary | null): boolean {
+export function canAckAccess(
+  access: EffectiveAccess | undefined,
+  user: UserSummary | null
+): boolean {
   if (isAdminOrSuper(user)) return true;
   return (
     access === 'SUPER_ADMIN' ||
@@ -38,7 +41,10 @@ export function canAckAccess(access: EffectiveAccess | undefined, user: UserSumm
   );
 }
 
-export function canConfigureDevice(device: DeviceView, user: UserSummary | null): boolean {
+export function canConfigureDevice(
+  device: DeviceView,
+  user: UserSummary | null
+): boolean {
   if (isAdminOrSuper(user)) return true;
   return (
     device.effectivePermission === 'SUPER_ADMIN' ||
@@ -47,8 +53,50 @@ export function canConfigureDevice(device: DeviceView, user: UserSummary | null)
   );
 }
 
+export function isMaintenanceActive(
+  maintenanceUntil: string | null | undefined,
+  nowMs = Date.now()
+): boolean {
+  if (!maintenanceUntil) return false;
+  const ts = Date.parse(maintenanceUntil);
+  return !Number.isNaN(ts) && ts > nowMs;
+}
+
+export function formatMaintenanceUntil(
+  maintenanceUntil: string | null | undefined,
+  lang: Language,
+  nowMs = Date.now()
+): string {
+  if (!maintenanceUntil) return '--';
+  const ts = Date.parse(maintenanceUntil);
+  if (Number.isNaN(ts)) return '--';
+  const target = new Date(ts);
+  const now = new Date(nowMs);
+  const sameDay =
+    target.getFullYear() === now.getFullYear() &&
+    target.getMonth() === now.getMonth() &&
+    target.getDate() === now.getDate();
+
+  const locale = lang === 'de' ? 'de-DE' : 'en-GB';
+  if (sameDay) {
+    return target.toLocaleTimeString(locale, {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  }
+  return target.toLocaleString(locale, {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
 export function isContactOpenValue(raw: unknown, invertContact?: boolean): boolean {
-  const truthy = raw === 1 || raw === '1' || raw === true || raw === 'OPEN' || raw === 'open';
+  const truthy =
+    raw === 1 || raw === '1' || raw === true || raw === 'OPEN' || raw === 'open';
   return invertContact ? !truthy : truthy;
 }
 
@@ -74,6 +122,13 @@ export function isOutlierForField(value: number, field?: SensorFieldDef): boolea
   return false;
 }
 
+export function formatLocalizedUnit(unit: string, lang: Language): string {
+  if (!unit) return '';
+  if (lang === 'en' && unit === 'Min.') return 'min';
+  if (lang === 'de' && unit === 'min') return 'Min.';
+  return unit;
+}
+
 export function formatDeviceReadings(
   device: DeviceView,
   profile: SensorProfile,
@@ -87,12 +142,18 @@ export function formatDeviceReadings(
   if (profile.fields.length === 0) {
     // Generic JSON fallback: render up to 4 scalar keys from payload
     const entries = Object.entries(source).filter(
-      ([, v]) => typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean'
+      ([, v]) =>
+        typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean'
     );
     return entries.slice(0, 4).map(([key, val], idx) => ({
       key,
       label: key,
-      displayValue: typeof val === 'number' ? String(Math.round(val * 100) / 100) : String(val),
+      displayValue:
+        typeof val === 'number'
+          ? (Math.round(val * 100) / 100).toLocaleString(
+              lang === 'de' ? 'de-DE' : 'en-US'
+            )
+          : String(val),
       isPrimary: idx === 0,
       isProbeError: device.probeErrorFields.includes(key),
     }));
@@ -164,10 +225,11 @@ export function formatDeviceReadings(
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals,
       });
+      const unitStr = formatLocalizedUnit(field.unit, lang);
       readings.push({
         key: field.key,
         label,
-        displayValue: field.unit ? `${formatted} ${field.unit}` : formatted,
+        displayValue: unitStr ? `${formatted} ${unitStr}` : formatted,
         isPrimary: Boolean(field.isPrimary),
         isProbeError: false,
       });
@@ -201,13 +263,18 @@ export function getPrimaryPinText(
   return primary.displayValue;
 }
 
-export function formatRelativeTime(iso: string | null | undefined, lang: Language): string {
+export function formatRelativeTime(
+  iso: string | null | undefined,
+  lang: Language,
+  nowMs = Date.now()
+): string {
   if (!iso) return t(lang, 'waitingFirstPacket');
   const ts = Date.parse(iso);
   if (Number.isNaN(ts) || ts <= 0) return t(lang, 'waitingFirstPacket');
 
-  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (diffSec < 45) return t(lang, 'justNow');
+  const diffSec = Math.max(0, Math.floor((nowMs - ts) / 1000));
+  if (diffSec < 10) return t(lang, 'justNow');
+  if (diffSec < 60) return t(lang, 'secondsAgo', { n: diffSec });
   const mins = Math.floor(diffSec / 60);
   if (mins < 60) return t(lang, 'minutesAgo', { n: mins });
   const hours = Math.floor(mins / 60);
@@ -216,16 +283,61 @@ export function formatRelativeTime(iso: string | null | undefined, lang: Languag
   return t(lang, 'daysAgo', { n: days });
 }
 
-export function formatDateTime(iso: string | null | undefined, lang: Language): string {
+/**
+ * Formats live-ticking sensor timestamp combining relative age and exact clock/date:
+ * e.g. "Gerade eben · 09:14:05" -> "vor 20 Sek. · 09:14:05" -> "vor 2 Min. · 09:14:05"
+ * (or with date when not from today).
+ */
+export function formatLiveTimestamp(
+  iso: string | null | undefined,
+  lang: Language,
+  nowMs = Date.now()
+): string {
+  if (!iso) return t(lang, 'waitingFirstPacket');
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts) || ts <= 0) return t(lang, 'waitingFirstPacket');
+
+  const rel = formatRelativeTime(iso, lang, nowMs);
+  const dt = new Date(ts);
+  const now = new Date(nowMs);
+  const sameDay =
+    dt.getFullYear() === now.getFullYear() &&
+    dt.getMonth() === now.getMonth() &&
+    dt.getDate() === now.getDate();
+
+  const locale = lang === 'de' ? 'de-DE' : 'en-GB';
+  const clockStr = sameDay
+    ? dt.toLocaleTimeString(locale, {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      })
+    : dt.toLocaleString(locale, {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+
+  return `${rel} · ${clockStr}`;
+}
+
+export function formatDateTime(
+  iso: string | null | undefined,
+  lang: Language
+): string {
   if (!iso) return '--';
   const ts = Date.parse(iso);
   if (Number.isNaN(ts) || ts <= 0) return '--';
-  return new Date(ts).toLocaleString(lang === 'de' ? 'de-DE' : 'en-US', {
+  return new Date(ts).toLocaleString(lang === 'de' ? 'de-DE' : 'en-GB', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
+    hour12: false,
   });
 }
 

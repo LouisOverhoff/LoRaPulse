@@ -11,8 +11,11 @@ import {
   type MeasurementPoint,
   type PermissionGrant,
   type PermissionLevel,
+  type PushSubscriptionSummary,
   type SensorProfile,
+  type SmtpSettingsSummary,
   type TtnApplicationSummary,
+  type UserDevicePreference,
   type UserGroup,
   type UserSummary,
 } from '@lorapulse/shared';
@@ -112,15 +115,27 @@ export interface InvitePreviewInfo {
   expiresAt?: string;
 }
 
+export interface PasswordResetPreviewInfo {
+  valid: boolean;
+  email?: string;
+  displayName?: string;
+  expiresAt?: string;
+}
+
 export interface CreatedInviteResult {
   invitePath: string;
   token?: string;
   expiresAt?: string;
+  emailSent?: boolean;
   user?: UserSummary;
 }
 
+export interface DeletedProfileResult {
+  reassignedDevices: number;
+}
+
 export const api = {
-  // Auth & Onboarding
+  // Auth, Onboarding & Password Reset
   async getAuthStatus(): Promise<AuthBootstrapStatus> {
     const raw = await requestJson<unknown>('/api/auth/status', {}, true);
     return unwrapObject<AuthBootstrapStatus>(raw, ['status', 'data']);
@@ -152,6 +167,47 @@ export const api = {
 
   async logout(): Promise<void> {
     await requestJson<unknown>('/api/auth/logout', { method: 'POST' }, true);
+  },
+
+  async requestPasswordReset(input: { email: string; lang: Language }): Promise<void> {
+    await requestJson<unknown>(
+      '/api/auth/password-reset/request',
+      { method: 'POST', body: JSON.stringify(input) },
+      true
+    );
+  },
+
+  async checkPasswordResetToken(token: string): Promise<PasswordResetPreviewInfo> {
+    const raw = await requestJson<unknown>(
+      `/api/auth/password-reset/${encodeURIComponent(token)}`,
+      {},
+      true
+    );
+    if (isRecord(raw)) {
+      const inner = isRecord(raw.reset) ? raw.reset : raw;
+      return {
+        valid: inner.valid !== false,
+        email: typeof inner.email === 'string' ? inner.email : undefined,
+        displayName: typeof inner.displayName === 'string' ? inner.displayName : undefined,
+        expiresAt: typeof inner.expiresAt === 'string' ? inner.expiresAt : undefined,
+      };
+    }
+    return { valid: true };
+  },
+
+  async confirmPasswordReset(input: {
+    token: string;
+    newPassword: string;
+  }): Promise<{ user: UserSummary | null }> {
+    const raw = await requestJson<unknown>(
+      '/api/auth/password-reset/confirm',
+      { method: 'POST', body: JSON.stringify(input) },
+      true
+    );
+    if (isRecord(raw) && isRecord(raw.user)) {
+      return { user: raw.user as unknown as UserSummary };
+    }
+    return { user: null };
   },
 
   async checkInvite(token: string): Promise<InvitePreviewInfo> {
@@ -199,7 +255,38 @@ export const api = {
     return unwrapObject<UserSummary>(raw, ['user']);
   },
 
-  // Devices, Measurements, Export & Downlinks
+  // Web-Push Subscriptions
+  async getPushSubscriptions(): Promise<PushSubscriptionSummary[]> {
+    const raw = await requestJson<unknown>('/api/push/subscriptions');
+    return unwrapArray<PushSubscriptionSummary>(raw, ['subscriptions', 'items', 'data']);
+  },
+
+  async registerPushSubscription(input: {
+    endpoint: string;
+    keys: { p256dh: string; auth: string };
+    deviceLabel?: string;
+  }): Promise<PushSubscriptionSummary> {
+    const raw = await requestJson<unknown>('/api/push/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    return unwrapObject<PushSubscriptionSummary>(raw, ['subscription', 'data']);
+  },
+
+  async deletePushSubscription(id: string): Promise<void> {
+    await requestJson<unknown>(`/api/push/subscriptions/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async sendTestPush(): Promise<void> {
+    await requestJson<unknown>('/api/push/test', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  },
+
+  // Devices, Preferences, Maintenance, Measurements, Export & Downlinks
   async getDevices(): Promise<DeviceView[]> {
     const raw = await requestJson<unknown>('/api/devices');
     return unwrapArray<DeviceView>(raw, ['devices', 'items', 'data']);
@@ -222,6 +309,61 @@ export const api = {
       body: JSON.stringify(patch),
     });
     return unwrapObject<DeviceView>(raw, ['device', 'data']);
+  },
+
+  async updateDeviceUserPreference(
+    deviceId: string,
+    patch: Partial<UserDevicePreference>
+  ): Promise<{ device?: DeviceView; preference?: UserDevicePreference }> {
+    const raw = await requestJson<unknown>(
+      `/api/devices/${encodeURIComponent(deviceId)}/preferences`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(patch),
+      }
+    );
+    if (isRecord(raw)) {
+      const device = isRecord(raw.device)
+        ? (raw.device as unknown as DeviceView)
+        : undefined;
+      const prefObj = isRecord(raw.preference)
+        ? raw.preference
+        : isRecord(raw.userPreference)
+          ? raw.userPreference
+          : typeof raw.pushEnabled === 'boolean' || typeof raw.isFavorite === 'boolean'
+            ? raw
+            : undefined;
+      return {
+        device,
+        preference: prefObj ? (prefObj as unknown as UserDevicePreference) : undefined,
+      };
+    }
+    return {};
+  },
+
+  async setDeviceMaintenance(
+    deviceId: string,
+    durationMinutes: number | null
+  ): Promise<{ device?: DeviceView; maintenanceUntil?: string | null }> {
+    const raw = await requestJson<unknown>(
+      `/api/devices/${encodeURIComponent(deviceId)}/maintenance`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ durationMinutes }),
+      }
+    );
+    if (isRecord(raw)) {
+      return {
+        device: isRecord(raw.device)
+          ? (raw.device as unknown as DeviceView)
+          : undefined,
+        maintenanceUntil:
+          typeof raw.maintenanceUntil === 'string' || raw.maintenanceUntil === null
+            ? raw.maintenanceUntil
+            : undefined,
+      };
+    }
+    return {};
   },
 
   async getMeasurements(
@@ -341,6 +483,26 @@ export const api = {
     return unwrapObject<SensorProfile>(raw, ['profile', 'data']);
   },
 
+  async deleteProfile(id: string): Promise<DeletedProfileResult> {
+    const raw = await requestJson<unknown>(`/api/profiles/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    if (isRecord(raw)) {
+      const count =
+        typeof raw.reassignedDevices === 'number'
+          ? raw.reassignedDevices
+          : typeof raw.affectedDevices === 'number'
+            ? raw.affectedDevices
+            : typeof raw.migratedCount === 'number'
+              ? raw.migratedCount
+              : typeof raw.reassignedCount === 'number'
+                ? raw.reassignedCount
+                : 0;
+      return { reassignedDevices: count };
+    }
+    return { reassignedDevices: 0 };
+  },
+
   // Admin: Users, Groups, Permissions
   async getUsers(): Promise<UserSummary[]> {
     const raw = await requestJson<unknown>('/api/admin/users');
@@ -352,6 +514,7 @@ export const api = {
     displayName: string;
     systemRole: 'ADMIN' | 'USER';
     groupIds: string[];
+    sendEmail?: boolean;
   }): Promise<CreatedInviteResult> {
     const raw = await requestJson<unknown>('/api/admin/users/invite', {
       method: 'POST',
@@ -369,6 +532,7 @@ export const api = {
         invitePath,
         token,
         expiresAt: typeof raw.expiresAt === 'string' ? raw.expiresAt : undefined,
+        emailSent: raw.emailSent === true,
         user: isRecord(raw.user) ? (raw.user as unknown as UserSummary) : undefined,
       };
     }
@@ -439,7 +603,7 @@ export const api = {
     });
   },
 
-  // Super Admin: TTN Apps, System Control, Audit Logs
+  // Super Admin: TTN Apps, SMTP Mail Server, System Control, Audit Logs
   async getTtnApps(): Promise<TtnApplicationSummary[]> {
     const raw = await requestJson<unknown>('/api/super/ttn-apps');
     return unwrapArray<TtnApplicationSummary>(raw, ['ttnApps', 'apps', 'items', 'data']);
@@ -471,6 +635,36 @@ export const api = {
   async deleteTtnApp(id: string): Promise<void> {
     await requestJson<unknown>(`/api/super/ttn-apps/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+    });
+  },
+
+  async getSmtpSettings(): Promise<SmtpSettingsSummary> {
+    const raw = await requestJson<unknown>('/api/super/smtp');
+    return unwrapObject<SmtpSettingsSummary>(raw, ['smtp', 'settings', 'data']);
+  },
+
+  async saveSmtpSettings(input: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    secure: boolean;
+    username: string;
+    password?: string;
+    fromEmail: string;
+    fromName: string;
+    publicBaseUrl: string;
+  }): Promise<SmtpSettingsSummary> {
+    const raw = await requestJson<unknown>('/api/super/smtp', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+    return unwrapObject<SmtpSettingsSummary>(raw, ['smtp', 'settings', 'data']);
+  },
+
+  async sendTestSmtpEmail(recipientEmail: string): Promise<void> {
+    await requestJson<unknown>('/api/super/smtp/test', {
+      method: 'POST',
+      body: JSON.stringify({ recipientEmail }),
     });
   },
 

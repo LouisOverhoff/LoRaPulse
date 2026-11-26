@@ -41,3 +41,12 @@ Chronologisches Verzeichnis aller wichtigen Architektur- und Designentscheidunge
 - **Entscheidung:**
   1. Kombination aus geprüften Fertig-Profilen (`DS03A-LB`, `D20-LB`, Wetterstation) und einem visuellen Live-Payload-JSON-Mapper mit Echtzeit-Kachelvorschau und Ausreißer-Filterung.
   2. LoRaWAN-Downlinks (über MQTT `.../down/replace` mit Status-Tracking für Class-A-Geräte) sind strikt der Rolle `SUPER_ADMIN` vorbehalten, geschützt durch Mindestintervall-Validierung und Audit-Log.
+
+## ADR-009: Multi-Device VAPID Web-Push, SMTP-Passwort-Reset & Pro-Sensor-Benachrichtigungspräferenzen (`v0.0.2`)
+- **Datum:** 2026-11-26 | **Status:** Beschlossen
+- **Kontext:** Nutzer möchten Hintergrund-Push-Mitteilungen parallel auf Smartphone und Laptop empfangen, einen eigenen SMTP-Mailserver für eigenständigen Passwort-Reset und optionale Alarm-E-Mails anbinden sowie pro Sensor individuell steuern, wie sie benachrichtigt werden.
+- **Entscheidung:**
+  1. Automatische serverseitige Generierung und `AES-256-GCM`-Speicherung eines eigenen VAPID-Schlüsselpaars (`system_kv`) sowie `1..n` `push_subscriptions` je Benutzer mit automatischer Bereinigung abgelaufener Browser-Abos (`HTTP 404/410`).
+  2. Zentrale SMTP-Konfiguration durch `SUPER_ADMIN` (`AES-256-GCM`-verschlüsselt) mit OWASP-konformem 30-Minuten-Einmal-Token für Passwort-Resets (neutraler Rückgabestatus gegen Account-Enumeration + Invalidierung alter Sessions nach Reset).
+  3. Tabelle `user_device_preferences` mit verbindlichem Systemstandard **`pushEnabled = true, emailEnabled = false, isFavorite = false`** je `(user_id, device_id)`.
+  4. Ergänzung um aktiven `OfflineWatchdog` (> 3× erwartetes Meldeintervall), automatische Alarm-Entwarnung (`RESOLVED`) und temporären Sensor-Wartungsmodus (`maintenance_until`).

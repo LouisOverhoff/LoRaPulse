@@ -15,10 +15,11 @@ import type {
   SensorProfile,
   UserSummary,
 } from '@lorapulse/shared';
-import { t } from '../i18n';
+import { useNowTick } from '../hooks/useNowTick';
+import { t, translateApiError } from '../i18n';
 import {
   canConfigureDevice,
-  formatRelativeTime,
+  formatLiveTimestamp,
   getPrimaryPinText,
   resolveProfile,
   statusColorHex,
@@ -119,6 +120,7 @@ export function MapView({
   ) => Promise<void>;
   onNotify: (msg: string, kind?: 'info' | 'error') => void;
 }) {
+  const nowMs = useNowTick(10000);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const baseLayerRef = useRef<L.TileLayer | null>(null);
@@ -202,12 +204,12 @@ export function MapView({
         ? L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
             maxZoom: 17,
             attribution:
-              'Map data: &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors, SRTM | Map style: &copy; <a href="https://opentopomap.org" target="_blank" rel="noreferrer">OpenTopoMap</a> (CC-BY-SA)',
+              '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a>, SRTM | &copy; <a href="https://opentopomap.org" target="_blank" rel="noreferrer">OpenTopoMap</a> (CC-BY-SA)',
           })
         : L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution:
-              '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors',
+              '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a>',
           });
 
     tileLayer.addTo(map);
@@ -235,7 +237,7 @@ export function MapView({
           onNotify(t(lang, 'mapCoordsSaved'), 'info');
         })
         .catch((err) => {
-          onNotify(err instanceof Error ? err.message : String(err), 'error');
+          onNotify(translateApiError(err, lang), 'error');
         })
         .finally(() => {
           setSavingGps(false);
@@ -340,7 +342,7 @@ export function MapView({
             onNotify(t(lang, 'mapCoordsSaved'), 'info');
           })
           .catch((err) => {
-            onNotify(err instanceof Error ? err.message : String(err), 'error');
+            onNotify(translateApiError(err, lang), 'error');
           })
           .finally(() => {
             setSavingGps(false);
@@ -446,7 +448,7 @@ export function MapView({
                 }}
                 className="lp-input !py-1 !px-2.5 !text-xs max-w-[230px]"
               >
-                <option value="">{t(lang, 'mapAssignUnlocated')}...</option>
+                <option value="">{t(lang, 'mapAssignUnlocated')}…</option>
                 {editableUnlocated.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.name} ({d.devEui.slice(-6)})
@@ -531,10 +533,11 @@ export function MapView({
                 voltage={selectedDevice.batteryVoltage}
                 state={selectedDevice.batteryState}
                 chemistry={selectedProfile.batteryChemistry}
+                lang={lang}
               />
             </div>
-            <span className="text-[var(--text-muted)]">
-              {formatRelativeTime(selectedDevice.lastSeenAt, lang)}
+            <span className="text-[var(--text-muted)] font-mono">
+              {formatLiveTimestamp(selectedDevice.lastSeenAt, lang, nowMs)}
             </span>
           </div>
 

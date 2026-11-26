@@ -1,5 +1,6 @@
 import {
   BUILTIN_SENSOR_PROFILES,
+  DEFAULT_USER_DEVICE_PREFERENCE,
   evaluateBatteryHealth,
   PERMISSION_RANK,
   type AlertItem,
@@ -12,12 +13,14 @@ import {
   type DownlinkStatus,
   type EffectiveAccess,
   type Language,
+  type LocalizedText,
   type PermissionGrant,
   type PermissionLevel,
   type SensorFieldDef,
   type SensorIconName,
   type SensorProfile,
   type SystemRole,
+  type UserDevicePreference,
   type UserGroup,
   type UserSummary,
 } from '@lorapulse/shared';
@@ -82,6 +85,7 @@ export interface DeviceJoinedRow {
   spreading_factor: string | null;
   status: string;
   last_seen_at: unknown;
+  maintenance_until: unknown;
   pending_downlink_json: unknown;
   created_at: unknown;
 }
@@ -91,6 +95,7 @@ export interface UserAccessContext {
   categoriesById: Map<string, CategoryRow>;
   categoryGrants: Array<{ categoryPath: string; categoryId: string; level: PermissionLevel }>;
   deviceGrants: Map<string, PermissionLevel>;
+  preferencesByDevice: Map<string, UserDevicePreference>;
 }
 
 function maxPermission(
@@ -227,6 +232,7 @@ export async function loadAllSensorProfiles(db: DbClient): Promise<SensorProfile
   const res = await db.query<{
     id: string;
     name: string;
+    localized_name_json?: unknown;
     brand: string;
     model: string;
     icon: SensorIconName;
@@ -240,27 +246,57 @@ export async function loadAllSensorProfiles(db: DbClient): Promise<SensorProfile
     return BUILTIN_SENSOR_PROFILES;
   }
 
-  return res.rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    brand: r.brand,
-    model: r.model,
-    icon: r.icon,
-    batteryChemistry: r.battery_chemistry,
-    downlinkIntervalCodec: r.downlink_interval_codec,
-    isBuiltIn: Boolean(r.is_built_in),
-    fields: parseJsonColumn<SensorFieldDef[]>(r.fields_json, []),
-  }));
+  return res.rows.map((r) => {
+    const builtIn = BUILTIN_SENSOR_PROFILES.find((b) => b.id === r.id);
+    const parsedLocalized = parseJsonColumn<LocalizedText | null>(r.localized_name_json, null);
+    const localizedName = parsedLocalized ?? builtIn?.localizedName;
+
+    return {
+      id: r.id,
+      name: r.name,
+      ...(localizedName ? { localizedName } : {}),
+      brand: r.brand,
+      model: r.model,
+      icon: r.icon,
+      batteryChemistry: r.battery_chemistry,
+      downlinkIntervalCodec: r.downlink_interval_codec,
+      isBuiltIn: Boolean(r.is_built_in),
+      fields: parseJsonColumn<SensorFieldDef[]>(r.fields_json, []),
+    };
+  });
 }
 
 export async function buildUserAccessContext(
   db: DbClient,
   user: UserSummary
 ): Promise<UserAccessContext> {
-  const catRes = await db.query<CategoryRow>('SELECT * FROM categories ORDER BY path ASC');
+  const [catRes, prefRes] = await Promise.all([
+    db.query<CategoryRow>('SELECT * FROM categories ORDER BY path ASC'),
+    db.query<{
+      device_id: string;
+      push_enabled: boolean;
+      email_enabled: boolean;
+      is_favorite: boolean;
+    }>(
+      `SELECT device_id, push_enabled, email_enabled, is_favorite
+       FROM user_device_preferences
+       WHERE user_id = $1`,
+      [user.id]
+    ),
+  ]);
+
   const categoriesById = new Map<string, CategoryRow>();
   for (const cat of catRes.rows) {
     categoriesById.set(cat.id, cat);
+  }
+
+  const preferencesByDevice = new Map<string, UserDevicePreference>();
+  for (const pref of prefRes.rows) {
+    preferencesByDevice.set(pref.device_id, {
+      pushEnabled: Boolean(pref.push_enabled),
+      emailEnabled: Boolean(pref.email_enabled),
+      isFavorite: Boolean(pref.is_favorite),
+    });
   }
 
   if (user.systemRole === 'SUPER_ADMIN' || user.systemRole === 'ADMIN') {
@@ -269,6 +305,7 @@ export async function buildUserAccessContext(
       categoriesById,
       categoryGrants: [],
       deviceGrants: new Map(),
+      preferencesByDevice,
     };
   }
 
@@ -320,6 +357,7 @@ export async function buildUserAccessContext(
     categoriesById,
     categoryGrants,
     deviceGrants,
+    preferencesByDevice,
   };
 }
 
@@ -380,21 +418,29 @@ export function getVisibleCategoriesForUser(ctx: UserAccessContext): CategoryNod
 function computeEffectiveDeviceHealth(
   storedStatus: string,
   lastSeenIso: string | null,
-  config: DeviceConfig
+  config: DeviceConfig,
+  maintenanceUntilIso: string | null
 ): DeviceHealthStatus {
-  if (storedStatus === 'ALARM' || storedStatus === 'WARN') {
-    return storedStatus;
+  if (storedStatus === 'ALARM') {
+    return 'ALARM';
+  }
+  if (storedStatus === 'OFFLINE') {
+    return 'OFFLINE';
+  }
+  if (storedStatus === 'WARN') {
+    return 'WARN';
   }
   if (!lastSeenIso) {
     return 'NEW';
   }
-  const expectedSec = config.expectedIntervalSec ?? 7200;
-  const elapsedMs = Date.now() - new Date(lastSeenIso).getTime();
-  if (elapsedMs > expectedSec * 2.5 * 1000) {
-    return 'OFFLINE';
-  }
-  if (storedStatus === 'OFFLINE') {
-    return 'OFFLINE';
+  const inMaintenance =
+    maintenanceUntilIso !== null && new Date(maintenanceUntilIso).getTime() > Date.now();
+  if (!inMaintenance) {
+    const expectedSec = config.expectedIntervalSec ?? 3600;
+    const elapsedMs = Date.now() - new Date(lastSeenIso).getTime();
+    if (elapsedMs > expectedSec * 3 * 1000) {
+      return 'OFFLINE';
+    }
   }
   return 'OK';
 }
@@ -458,7 +504,17 @@ export function mapRowToDeviceViewForUser(
     profile?.batteryChemistry ?? 'li_socl2_3v6'
   );
   const lastSeenAt = toIsoOrNull(row.last_seen_at);
-  const status = computeEffectiveDeviceHealth(row.status, lastSeenAt, config);
+  const maintenanceUntil = toIsoOrNull(row.maintenance_until);
+  const status = computeEffectiveDeviceHealth(row.status, lastSeenAt, config, maintenanceUntil);
+
+  const storedPref = ctx.preferencesByDevice.get(row.id);
+  const userPreference: UserDevicePreference = storedPref
+    ? {
+        pushEnabled: Boolean(storedPref.pushEnabled),
+        emailEnabled: Boolean(storedPref.emailEnabled),
+        isFavorite: Boolean(storedPref.isFavorite),
+      }
+    : { ...DEFAULT_USER_DEVICE_PREFERENCE };
 
   return {
     id: row.id,
@@ -485,6 +541,8 @@ export function mapRowToDeviceViewForUser(
     spreadingFactor: row.spreading_factor ?? null,
     status,
     lastSeenAt,
+    maintenanceUntil,
+    userPreference,
     pendingDownlink,
     effectivePermission,
     createdAt: toIso(row.created_at),
@@ -608,11 +666,12 @@ export async function loadVisibleAlertsForUser(
     status: AlertItem['status'];
     acked_by_name: string | null;
     acked_at: unknown;
+    resolved_at: unknown;
     created_at: unknown;
   }>(
     `SELECT * FROM alerts
      WHERE device_id IN (${placeholders})
-     ORDER BY CASE WHEN status = 'OPEN' THEN 0 ELSE 1 END, created_at DESC
+     ORDER BY CASE WHEN status = 'OPEN' THEN 0 WHEN status = 'ACKED' THEN 1 ELSE 2 END, created_at DESC
      LIMIT 250`,
     deviceIds
   );
@@ -628,6 +687,90 @@ export async function loadVisibleAlertsForUser(
     status: r.status,
     ackedByName: r.acked_by_name ?? null,
     ackedAt: toIsoOrNull(r.acked_at),
+    resolvedAt: toIsoOrNull(r.resolved_at),
     createdAt: toIso(r.created_at),
   }));
+}
+
+export async function loadAuthorizedUsersForDevice(
+  db: DbClient,
+  deviceId: string,
+  categoryId: string | null
+): Promise<UserSummary[]> {
+  const [usersRes, membersRes, catRes, permsRes] = await Promise.all([
+    db.query<UserRow>('SELECT * FROM users WHERE is_active = TRUE ORDER BY created_at ASC'),
+    db.query<{ user_id: string; group_id: string }>('SELECT * FROM user_group_members'),
+    db.query<CategoryRow>('SELECT * FROM categories'),
+    db.query<PermissionRow>('SELECT * FROM permissions'),
+  ]);
+
+  if (usersRes.rows.length === 0) {
+    return [];
+  }
+
+  const groupsByUser = new Map<string, string[]>();
+  for (const m of membersRes.rows) {
+    const list = groupsByUser.get(m.user_id) ?? [];
+    list.push(m.group_id);
+    groupsByUser.set(m.user_id, list);
+  }
+
+  const categoriesById = new Map<string, CategoryRow>();
+  for (const cat of catRes.rows) {
+    categoriesById.set(cat.id, cat);
+  }
+  const targetCat = categoryId ? (categoriesById.get(categoryId) ?? null) : null;
+
+  const authorized: UserSummary[] = [];
+
+  for (const u of usersRes.rows) {
+    const groupIds = groupsByUser.get(u.id) ?? [];
+    const summary: UserSummary = {
+      id: u.id,
+      email: u.email,
+      displayName: u.display_name,
+      systemRole: u.system_role,
+      preferredLang: u.preferred_lang,
+      isActive: Boolean(u.is_active),
+      mustChangePassword: Boolean(u.must_change_password),
+      groupIds,
+      createdAt: toIso(u.created_at),
+    };
+
+    if (u.system_role === 'SUPER_ADMIN' || u.system_role === 'ADMIN') {
+      authorized.push(summary);
+      continue;
+    }
+
+    const groupSet = new Set(groupIds);
+    let hasAccess = false;
+
+    for (const perm of permsRes.rows) {
+      const subjectMatch =
+        perm.user_id === u.id || (perm.group_id !== null && groupSet.has(perm.group_id));
+      if (!subjectMatch) continue;
+
+      if (perm.device_id === deviceId) {
+        hasAccess = true;
+        break;
+      }
+
+      if (targetCat && perm.category_id) {
+        const grantedCat = categoriesById.get(perm.category_id);
+        if (
+          grantedCat &&
+          (targetCat.id === grantedCat.id || targetCat.path.startsWith(`${grantedCat.path}.`))
+        ) {
+          hasAccess = true;
+          break;
+        }
+      }
+    }
+
+    if (hasAccess) {
+      authorized.push(summary);
+    }
+  }
+
+  return authorized;
 }

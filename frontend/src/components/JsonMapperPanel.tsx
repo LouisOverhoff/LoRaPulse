@@ -10,7 +10,9 @@ import {
   Upload,
 } from 'lucide-react';
 import {
+  DEFAULT_USER_DEVICE_PREFERENCE,
   evaluateBatteryHealth,
+  formatProfileDisplayName,
   type BatteryChemistry,
   type DeviceView,
   type DownlinkCodecType,
@@ -20,8 +22,13 @@ import {
   type SensorIconName,
   type SensorProfile,
 } from '@lorapulse/shared';
-import { api, ApiError } from '../api';
-import { t } from '../i18n';
+import { api } from '../api';
+import {
+  formatFieldKindLabel,
+  formatSensorIconLabel,
+  t,
+  translateApiError,
+} from '../i18n';
 import { getPrimaryPinText, isOutlierForField } from '../utils/telemetry';
 import { DeviceCard } from './DeviceCard';
 import { SensorVectorIcon } from './TelemetryIndicators';
@@ -42,12 +49,14 @@ export function JsonMapperPanel({
   profiles,
   lang,
   onProfileSaved,
+  onProfileDeleted,
   onNotify,
 }: {
   devices: DeviceView[];
   profiles: SensorProfile[];
   lang: Language;
   onProfileSaved: (profile: SensorProfile) => void;
+  onProfileDeleted: (profileId: string) => Promise<void>;
   onNotify: (msg: string, kind?: 'info' | 'error') => void;
 }) {
   const [sourceMode, setSourceMode] = useState<'sample' | 'device'>('sample');
@@ -59,7 +68,9 @@ export function JsonMapperPanel({
   const [importText, setImportText] = useState('');
 
   const [profileId, setProfileId] = useState('custom_soil_sensor');
-  const [profileName, setProfileName] = useState('Custom Soil & Temp Sensor');
+  const [profileName, setProfileName] = useState(() =>
+    t(lang, 'mapperDefaultDraftName')
+  );
   const [brand, setBrand] = useState('custom');
   const [model, setModel] = useState('v1');
   const [icon, setIcon] = useState<SensorIconName>('activity');
@@ -100,6 +111,8 @@ export function JsonMapperPanel({
   ]);
 
   const [saving, setSaving] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const selectedLiveDevice = useMemo(
     () => devices.find((d) => d.id === selectedDeviceId) ?? null,
@@ -121,14 +134,14 @@ export function JsonMapperPanel({
       if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
         return { data: parsed as Record<string, unknown>, parseError: null };
       }
-      return { data: null, parseError: 'JSON root must be an object' };
-    } catch (err) {
+      return { data: null, parseError: t(lang, 'mapperJsonRootObjectError') };
+    } catch {
       return {
         data: null,
-        parseError: err instanceof Error ? err.message : 'Invalid JSON',
+        parseError: t(lang, 'mapperJsonInvalidError'),
       };
     }
-  }, [sourceMode, selectedLiveDevice, sampleJsonText]);
+  }, [sourceMode, selectedLiveDevice, sampleJsonText, lang]);
 
   const scalarKeys = useMemo(() => {
     if (!activePayload.data) return [];
@@ -193,7 +206,7 @@ export function JsonMapperPanel({
   const draftProfile: SensorProfile = useMemo(
     () => ({
       id: profileId.trim() || 'custom_profile',
-      name: profileName.trim() || 'Custom Sensor',
+      name: profileName.trim() || t(lang, 'mapperDefaultDraftName'),
       brand: brand.trim() || 'custom',
       model: model.trim() || 'custom',
       icon,
@@ -202,7 +215,17 @@ export function JsonMapperPanel({
       isBuiltIn: false,
       fields,
     }),
-    [profileId, profileName, brand, model, icon, batteryChemistry, downlinkCodec, fields]
+    [
+      profileId,
+      profileName,
+      brand,
+      model,
+      icon,
+      batteryChemistry,
+      downlinkCodec,
+      fields,
+      lang,
+    ]
   );
 
   // Build synthetic DeviceView for real-time card & map-pin preview
@@ -234,9 +257,9 @@ export function JsonMapperPanel({
     return {
       id: 'preview-device',
       ttnApplicationId: 'preview-app',
-      ttnAppName: 'Live Preview',
+      ttnAppName: t(lang, 'mapperPreviewApp'),
       categoryId: 'preview-cat',
-      categoryBreadcrumb: ['Preview'],
+      categoryBreadcrumb: [t(lang, 'mapperPreviewCategory')],
       isDirectShareOnly: false,
       sensorProfileId: draftProfile.id,
       devEui: 'A84041000181F099',
@@ -244,7 +267,7 @@ export function JsonMapperPanel({
       name: draftProfile.name,
       latitude: 50.1109,
       longitude: 8.6821,
-      locationLabel: 'Test Bench',
+      locationLabel: t(lang, 'mapperPreviewLocation'),
       config: {},
       latestValues,
       rawLatestPayload: payload,
@@ -256,11 +279,13 @@ export function JsonMapperPanel({
       spreadingFactor: 'SF7',
       status: probeErrorFields.length > 0 ? 'WARN' : 'OK',
       lastSeenAt: new Date().toISOString(),
+      maintenanceUntil: null,
+      userPreference: DEFAULT_USER_DEVICE_PREFERENCE,
       pendingDownlink: null,
       effectivePermission: 'SUPER_ADMIN',
       createdAt: new Date().toISOString(),
     };
-  }, [activePayload.data, fields, batteryChemistry, draftProfile]);
+  }, [activePayload.data, fields, batteryChemistry, draftProfile, lang]);
 
   async function handleSaveProfile(e: FormEvent) {
     e.preventDefault();
@@ -280,9 +305,30 @@ export function JsonMapperPanel({
       onProfileSaved(saved);
       onNotify(t(lang, 'mapperSavedSuccess'), 'info');
     } catch (err) {
-      onNotify(err instanceof ApiError ? err.message : String(err), 'error');
+      onNotify(translateApiError(err, lang), 'error');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleConfirmDeleteProfile(id: string) {
+    setDeletingId(id);
+    try {
+      const res = await api.deleteProfile(id);
+      setConfirmDeleteId(null);
+      await onProfileDeleted(id);
+      if (res.reassignedDevices > 0) {
+        onNotify(
+          t(lang, 'profileDeletedWithReassign', { n: res.reassignedDevices }),
+          'info'
+        );
+      } else {
+        onNotify(t(lang, 'profileDeletedSimple'), 'info');
+      }
+    } catch (err) {
+      onNotify(translateApiError(err, lang), 'error');
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -306,15 +352,15 @@ export function JsonMapperPanel({
       if (Array.isArray(parsed.fields)) setFields(parsed.fields);
       setImportPromptOpen(false);
       setImportText('');
-    } catch (err) {
-      onNotify(err instanceof Error ? err.message : 'Invalid profile JSON', 'error');
+    } catch {
+      onNotify(t(lang, 'mapperProfileImportInvalidError'), 'error');
     }
   }
 
   const pinPreviewText = getPrimaryPinText(previewDevice, draftProfile, lang);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="lp-surface rounded-2xl p-5 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
@@ -547,9 +593,9 @@ export function JsonMapperPanel({
                   }
                   className="lp-input text-xs"
                 >
-                  <option value="li_socl2_3v6">3.6 V Li-SOCl2 (ER26500 / ER14505)</option>
-                  <option value="alkaline_3v0">3.0 V Alkaline (2x AA / AAA)</option>
-                  <option value="none">External / None</option>
+                  <option value="li_socl2_3v6">{t(lang, 'mapperChemLiSocl2')}</option>
+                  <option value="alkaline_3v0">{t(lang, 'mapperChemAlkaline')}</option>
+                  <option value="none">{t(lang, 'mapperChemNone')}</option>
                 </select>
               </div>
 
@@ -564,10 +610,8 @@ export function JsonMapperPanel({
                   }
                   className="lp-input text-xs"
                 >
-                  <option value="dragino_tdc_port2">
-                    Dragino TDC (FPort 2: 0x01 + 3B sec)
-                  </option>
-                  <option value="none">None</option>
+                  <option value="dragino_tdc_port2">{t(lang, 'mapperCodecDragino')}</option>
+                  <option value="none">{t(lang, 'mapperCodecNone')}</option>
                 </select>
               </div>
             </div>
@@ -591,7 +635,7 @@ export function JsonMapperPanel({
                     }`}
                   >
                     <SensorVectorIcon icon={ic} className="w-3.5 h-3.5" />
-                    {ic}
+                    {formatSensorIconLabel(ic, lang)}
                   </button>
                 ))}
               </div>
@@ -644,7 +688,7 @@ export function JsonMapperPanel({
                         <input
                           type="text"
                           required
-                          placeholder="Label DE"
+                          placeholder={t(lang, 'mapperLabelDePlaceholder')}
                           value={field.label.de}
                           onChange={(e) =>
                             updateField(idx, {
@@ -656,7 +700,7 @@ export function JsonMapperPanel({
                         <input
                           type="text"
                           required
-                          placeholder="Label EN"
+                          placeholder={t(lang, 'mapperLabelEnPlaceholder')}
                           value={field.label.en}
                           onChange={(e) =>
                             updateField(idx, {
@@ -674,14 +718,17 @@ export function JsonMapperPanel({
                           }
                           className="lp-input !py-1 !px-2 !text-xs"
                         >
-                          <option value="number">number</option>
-                          <option value="contact">contact</option>
-                          <option value="battery">battery</option>
-                          <option value="counter">counter</option>
+                          {(
+                            ['number', 'contact', 'battery', 'counter'] as SensorFieldKind[]
+                          ).map((k) => (
+                            <option key={k} value={k}>
+                              {formatFieldKindLabel(k, lang)}
+                            </option>
+                          ))}
                         </select>
                         <input
                           type="text"
-                          placeholder="Unit (°C, %)"
+                          placeholder={t(lang, 'mapperUnitPlaceholder')}
                           value={field.unit}
                           onChange={(e) =>
                             updateField(idx, { unit: e.target.value })
@@ -696,7 +743,7 @@ export function JsonMapperPanel({
                             type="number"
                             min={0}
                             max={4}
-                            placeholder="Decimals"
+                            placeholder={t(lang, 'mapperDecimalsPlaceholder')}
                             value={field.decimals ?? 1}
                             onChange={(e) =>
                               updateField(idx, {
@@ -757,23 +804,84 @@ export function JsonMapperPanel({
         </div>
       </div>
 
-      {/* Existing Profiles Catalog */}
+      {/* Existing Profiles Catalog with Delete option for Custom Profiles */}
       <div className="lp-surface rounded-2xl p-5 space-y-3">
         <h3 className="text-sm font-bold">{t(lang, 'existingProfilesTitle')}</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {profiles.map((p) => (
-            <div key={p.id} className="lp-elevated rounded-xl p-3 flex items-start gap-2.5">
-              <span className="p-2 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] shrink-0">
-                <SensorVectorIcon icon={p.icon} className="w-4 h-4" />
-              </span>
-              <div className="min-w-0">
-                <div className="font-semibold text-xs truncate">{p.name}</div>
-                <div className="font-mono text-[11px] text-[var(--text-muted)] truncate">
-                  {p.id} · {p.fields.length} fields
+          {profiles.map((p) => {
+            const isConfirming = confirmDeleteId === p.id;
+            return (
+              <div
+                key={p.id}
+                className="lp-elevated rounded-xl p-3 flex items-start justify-between gap-2.5"
+              >
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <span className="p-2 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] shrink-0">
+                    <SensorVectorIcon icon={p.icon} className="w-4 h-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="font-semibold text-xs truncate">
+                      {formatProfileDisplayName(p, lang)}
+                    </div>
+                    <div className="font-mono text-[11px] text-[var(--text-muted)] truncate mt-0.5">
+                      {p.id} · {t(lang, 'profileFieldsCount', { n: p.fields.length })}
+                    </div>
+                    <span
+                      className={`inline-block mt-1 px-1.5 py-0.2 rounded text-[10px] font-semibold ${
+                        p.isBuiltIn
+                          ? 'bg-slate-500/15 text-[var(--text-muted)]'
+                          : 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                      }`}
+                    >
+                      {p.isBuiltIn
+                        ? t(lang, 'profileBuiltInBadge')
+                        : t(lang, 'profileCustomBadge')}
+                    </span>
+                  </div>
                 </div>
+
+                {!p.isBuiltIn && (
+                  <div className="shrink-0">
+                    {isConfirming ? (
+                      <div className="flex flex-col items-end gap-1">
+                        <span className="text-[10px] font-semibold text-red-500">
+                          {t(lang, 'profileDeleteAsk')}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            disabled={deletingId === p.id}
+                            onClick={() => handleConfirmDeleteProfile(p.id)}
+                            className="lp-btn-danger !py-0.5 !px-2 !text-[11px]"
+                          >
+                            {t(lang, 'confirm')}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deletingId === p.id}
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="lp-btn-secondary !py-0.5 !px-2 !text-[11px]"
+                          >
+                            {t(lang, 'cancel')}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteId(p.id)}
+                        className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/12 transition-colors cursor-pointer"
+                        title={t(lang, 'delete')}
+                        aria-label={t(lang, 'delete')}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" strokeWidth={1.85} />
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
