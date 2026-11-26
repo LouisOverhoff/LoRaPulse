@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createApp } from '../src/app.js';
+import { resolveVapidSubject } from '../src/services/notifications.js';
 import { createTtnSimulatorServer } from '../../simulator/dist/index.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -484,4 +485,41 @@ test('LoRaPulse v0.0.2 – Web-Push, SMTP, Password Reset, Per-Sensor Prefs, Pro
     await app.close();
     await sim.close();
   }
+});
+
+test('v0.0.2 iOS Web-Push VAPID subject resolver never emits .local or localhost', () => {
+  // 1. Valid SMTP fromEmail takes precedence
+  assert.equal(
+    resolveVapidSubject({
+      smtpFromEmail: 'alerts@overhoff.it',
+      appDomain: 'lorapulse.overhoff.it',
+    }),
+    'mailto:alerts@overhoff.it'
+  );
+
+  // 2. Rejects .local SMTP address and falls back to APP_DOMAIN HTTPS origin (Apple APNs compliant)
+  assert.equal(
+    resolveVapidSubject({
+      smtpFromEmail: 'admin@lorapulse.local',
+      appDomain: 'lorapulse.overhoff.it',
+    }),
+    'https://lorapulse.overhoff.it'
+  );
+
+  // 3. Uses publicBaseUrl if SMTP is empty
+  assert.equal(
+    resolveVapidSubject({
+      publicBaseUrl: 'https://lorapulse.overhoff.it/dashboard',
+    }),
+    'https://lorapulse.overhoff.it'
+  );
+
+  // 4. Rejects localhost / raw IP and falls back to valid HTTPS repo URI (never .local)
+  const fallback = resolveVapidSubject({
+    smtpFromEmail: '',
+    appDomain: 'localhost',
+    requestOrigin: 'http://127.0.0.1:8080',
+  });
+  assert.equal(fallback.startsWith('https://'), true);
+  assert.equal(fallback.includes('.local'), false);
 });

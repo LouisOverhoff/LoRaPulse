@@ -60,6 +60,14 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return outputArray;
 }
 
+function uint8ArraysEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 function detectDeviceLabel(lang: Language): string {
   if (typeof navigator === 'undefined') {
     return lang === 'de' ? 'Web-Browser' : 'Web Browser';
@@ -317,24 +325,49 @@ export function AdminView({
         return;
       }
 
-      let reg = await navigator.serviceWorker.getRegistration();
+      let reg = await navigator.serviceWorker.getRegistration('/');
       if (!reg) {
         reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
       }
       const readyReg = await navigator.serviceWorker.ready;
+      if (!readyReg.pushManager) {
+        onNotify(t(lang, 'pushUnsupportedNotice'), 'error');
+        return;
+      }
 
+      const expectedKey = urlBase64ToUint8Array(vapidPublicKey);
       let sub = await readyReg.pushManager.getSubscription();
+
+      // Re-subscribe cleanly if an existing subscription used a different/stale VAPID key
+      if (sub) {
+        const existingKeyBuf = sub.options?.applicationServerKey;
+        const keyMatches =
+          existingKeyBuf instanceof ArrayBuffer &&
+          uint8ArraysEqual(new Uint8Array(existingKeyBuf), expectedKey);
+        if (!keyMatches) {
+          try {
+            await sub.unsubscribe();
+          } catch {
+            // Continue to create a fresh subscription
+          }
+          sub = null;
+        }
+      }
+
       if (!sub) {
-        const appServerKey = urlBase64ToUint8Array(vapidPublicKey);
         sub = await readyReg.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: appServerKey.buffer as ArrayBuffer,
+          applicationServerKey: expectedKey.buffer as ArrayBuffer,
         });
       }
 
       const json = sub.toJSON();
       const p256dh = json.keys?.p256dh ?? '';
       const auth = json.keys?.auth ?? '';
+      if (!p256dh || !auth) {
+        onNotify(t(lang, 'pushUnsupportedNotice'), 'error');
+        return;
+      }
 
       await api.registerPushSubscription({
         endpoint: sub.endpoint,
@@ -364,8 +397,28 @@ export function AdminView({
   async function handleSendTestPush() {
     setTestingPush(true);
     try {
-      await api.sendTestPush();
-      onNotify(t(lang, 'pushTestSentSuccess'), 'info');
+      const res = await api.sendTestPush();
+      if (res.removedCount > 0) {
+        await loadPushSubscriptions();
+      }
+      if (res.sentCount > 0 && res.failedCount === 0) {
+        onNotify(t(lang, 'pushTestSentSuccess'), 'info');
+      } else if (res.sentCount > 0 && res.failedCount > 0) {
+        onNotify(
+          t(lang, 'pushTestPartialSuccess', {
+            sent: res.sentCount,
+            failed: res.failedCount,
+          }),
+          'error'
+        );
+      } else if (res.lastError) {
+        onNotify(
+          t(lang, 'pushTestFailedDetail', { detail: res.lastError }),
+          'error'
+        );
+      } else {
+        onNotify(t(lang, 'pushTestNoActiveDevices'), 'error');
+      }
     } catch (err) {
       onNotify(translateApiError(err, lang), 'error');
     } finally {

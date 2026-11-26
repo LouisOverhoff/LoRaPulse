@@ -4,6 +4,7 @@ import * as webpushNs from 'web-push';
 import type { z } from 'zod';
 import {
   DEFAULT_USER_DEVICE_PREFERENCE,
+  GITHUB_REPO_URL,
   SaveSmtpSettingsSchema,
   type AlertItem,
   type Language,
@@ -32,6 +33,65 @@ export type CustomPushSender = (
   sub: { endpoint: string; keys: { p256dh: string; auth: string } },
   payloadJson: string
 ) => Promise<{ statusCode?: number } | void>;
+
+export interface PushDeliveryResult {
+  sentCount: number;
+  failedCount: number;
+  removedCount: number;
+  lastError: string | null;
+}
+
+/**
+ * Resolves an RFC 8292 & Apple APNs compliant VAPID subject ("sub" claim).
+ * Apple Web Push (web.push.apple.com) strictly rejects ".local", "localhost",
+ * or malformed mailto/http origins. Always returns a valid mailto: or https: URI.
+ */
+export function resolveVapidSubject(options: {
+  smtpFromEmail?: string | null;
+  publicBaseUrl?: string | null;
+  appDomain?: string | null;
+  requestOrigin?: string | null;
+}): string {
+  const email = (options.smtpFromEmail ?? '').trim();
+  if (
+    email &&
+    /^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/.test(email) &&
+    !email.toLowerCase().endsWith('.local') &&
+    !email.toLowerCase().endsWith('.localhost') &&
+    !email.toLowerCase().endsWith('.invalid')
+  ) {
+    return `mailto:${email}`;
+  }
+
+  const candidateOrigins = [
+    options.publicBaseUrl,
+    options.appDomain ? `https://${options.appDomain.replace(/^https?:\/\//i, '')}` : null,
+    options.requestOrigin,
+  ];
+
+  for (const raw of candidateOrigins) {
+    const trimmed = (raw ?? '').trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = new URL(trimmed);
+      const host = parsed.hostname.toLowerCase();
+      if (
+        parsed.protocol === 'https:' &&
+        host.includes('.') &&
+        host !== 'localhost' &&
+        !host.endsWith('.local') &&
+        !host.endsWith('.localhost') &&
+        !/^\d+\.\d+\.\d+\.\d+$/.test(host)
+      ) {
+        return `https://${host}`;
+      }
+    } catch {
+      // Try next candidate
+    }
+  }
+
+  return GITHUB_REPO_URL;
+}
 
 interface StoredSmtpSettings {
   enabled: boolean;
@@ -529,31 +589,33 @@ export class NotificationDispatcher {
       deviceId?: string | null;
       url: string;
       severity?: string;
-    }
-  ): Promise<number> {
+    },
+    requestOrigin?: string
+  ): Promise<PushDeliveryResult> {
     const subsRes = await this.db.query<PushSubscriptionRow>(
       `SELECT * FROM push_subscriptions WHERE user_id = $1 ORDER BY created_at ASC`,
       [userId]
     );
     if (subsRes.rows.length === 0) {
-      return 0;
+      return { sentCount: 0, failedCount: 0, removedCount: 0, lastError: null };
     }
 
     const vapidKeys = await ensureVapidKeyPair(this.db);
     const { settings } = await this.loadStoredSmtp();
-    const contactEmail =
-      settings?.fromEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(settings.fromEmail.trim())
-        ? settings.fromEmail.trim()
-        : 'admin@lorapulse.local';
+    const vapidSubject = resolveVapidSubject({
+      smtpFromEmail: settings?.fromEmail,
+      publicBaseUrl: settings?.publicBaseUrl,
+      appDomain: process.env.APP_DOMAIN,
+      requestOrigin,
+    });
 
-    webpush.setVapidDetails(
-      `mailto:${contactEmail}`,
-      vapidKeys.publicKey,
-      vapidKeys.privateKey
-    );
+    webpush.setVapidDetails(vapidSubject, vapidKeys.publicKey, vapidKeys.privateKey);
 
     const payloadJson = JSON.stringify(payload);
     let sentCount = 0;
+    let failedCount = 0;
+    let removedCount = 0;
+    let lastError: string | null = null;
 
     await Promise.all(
       subsRes.rows.map(async (subRow) => {
@@ -565,18 +627,37 @@ export class NotificationDispatcher {
           },
         };
 
+        let endpointHost = 'push-endpoint';
+        try {
+          endpointHost = new URL(subRow.endpoint).hostname;
+        } catch {
+          // Keep safe fallback label
+        }
+
         try {
           let statusCode: number | undefined;
           if (this.customPushSender) {
             const hookRes = await this.customPushSender(subObj, payloadJson);
             statusCode = hookRes?.statusCode;
           } else {
-            const res = await webpush.sendNotification(subObj, payloadJson, { timeout: 8_000 });
+            const res = await webpush.sendNotification(subObj, payloadJson, {
+              TTL: 86_400,
+              urgency: 'high',
+              timeout: 10_000,
+            });
             statusCode = res.statusCode;
           }
 
           if (statusCode === 404 || statusCode === 410) {
             await this.db.query(`DELETE FROM push_subscriptions WHERE id = $1`, [subRow.id]);
+            removedCount += 1;
+            return;
+          }
+
+          if (statusCode !== undefined && statusCode >= 400) {
+            failedCount += 1;
+            lastError = `${endpointHost} HTTP ${statusCode}`;
+            console.warn(`[LoRaPulse][Push] Delivery rejected by ${endpointHost}: HTTP ${statusCode}`);
             return;
           }
 
@@ -586,28 +667,42 @@ export class NotificationDispatcher {
             [subRow.id]
           );
         } catch (err) {
-          const code = (err as { statusCode?: number } | null)?.statusCode;
+          const webPushErr = err as { statusCode?: number; body?: string; message?: string } | null;
+          const code = webPushErr?.statusCode;
           if (code === 404 || code === 410) {
             await this.db.query(`DELETE FROM push_subscriptions WHERE id = $1`, [subRow.id]);
+            removedCount += 1;
+            return;
           }
+          failedCount += 1;
+          const safeDetail =
+            typeof webPushErr?.body === 'string' && webPushErr.body.trim().length > 0
+              ? webPushErr.body.trim().slice(0, 120)
+              : webPushErr?.message?.slice(0, 120) || 'Unknown push delivery error';
+          lastError = code ? `${endpointHost} HTTP ${code}: ${safeDetail}` : `${endpointHost}: ${safeDetail}`;
+          console.error(`[LoRaPulse][Push] Failed delivering to ${endpointHost} (${subRow.device_label}): ${lastError}`);
         }
       })
     );
 
-    return sentCount;
+    return { sentCount, failedCount, removedCount, lastError };
   }
 
-  async sendTestPush(user: UserSummary): Promise<number> {
+  async sendTestPush(user: UserSummary, requestOrigin?: string): Promise<PushDeliveryResult> {
     const isEn = user.preferredLang === 'en';
-    return this.sendPushToUser(user.id, {
-      title: isEn ? 'LoRaPulse Test Notification' : 'LoRaPulse Test-Benachrichtigung',
-      body: isEn
-        ? 'Web Push notifications are active on this device.'
-        : 'Web-Push-Benachrichtigungen sind auf diesem Endgerät aktiv.',
-      deviceId: null,
-      url: '/',
-      severity: 'INFO',
-    });
+    return this.sendPushToUser(
+      user.id,
+      {
+        title: isEn ? 'LoRaPulse Test Notification' : 'LoRaPulse Test-Benachrichtigung',
+        body: isEn
+          ? 'Web Push notifications are active on this device.'
+          : 'Web-Push-Benachrichtigungen sind auf diesem Endgerät aktiv.',
+        deviceId: null,
+        url: '/',
+        severity: 'INFO',
+      },
+      requestOrigin
+    );
   }
 
   async dispatchAlertNotifications(

@@ -6,7 +6,8 @@
 
 - **Anmeldung & Passwort vergessen:** Ist durch den Super-Admin ein Mailserver eingerichtet, erscheint auf der Anmeldemaske automatisch *„Passwort vergessen?"*. Darüber erhältst du einen 30 Minuten gültigen Einmal-Link zum Festlegen eines neuen Passworts.
 - **Installation am Smartphone & Laptop (wichtig für Push-Benachrichtigungen):**
-  - **iPhone / iPad (ab iOS 16.4):** In Safari öffnen -> *Teilen* -> *Zum Home-Bildschirm* -> installierte App vom Home-Bildschirm starten.
+  - **iPhone / iPad (ab iOS 16.4):** In Safari öffnen -> *Teilen* -> *Zum Home-Bildschirm* -> installierte App vom Home-Bildschirm starten. *(Hinweis nach dem `v0.0.2`-iOS-Icon-/Header-Update: Falls das alte Symbol bereits auf dem Home-Bildschirm lag, einmal entfernen und neu über Safari hinzufügen, damit iOS das neue PNG-App-Icon und die nicht-geblurte obere Leiste übernimmt.)*
+  - **Kompakte Übersicht:** In **Übersicht** und **Sensoren** lässt sich oben rechts zwischen **Standard** und **Kompakt** umschalten, um deutlich mehr einzelne Sensoren gleichzeitig auf dem iPhone oder Monitor zu sehen.
   - **Android & Laptop (Windows / macOS / Linux):** Direkt im Browser (Chrome, Edge, Firefox, Safari) oder über das *App installieren*-Symbol in der Adressleiste nutzbar.
 
 ---

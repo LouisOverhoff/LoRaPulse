@@ -24,6 +24,12 @@
   - 100 % Sprachreinheit (`DE` vs. `EN` ohne englische Enum-Reste) & `0 Emojis` im gesamten Quellcode.
   - Löschen benutzerdefinierter Sensor-Profile inkl. verlustfreiem Geräte-Fallback auf `generic_json`.
 
+- [x] **iOS-PWA & Layout-Hotfix (innerhalb `v0.0.2`):**
+  - Apple-APNs-konformer VAPID-`sub`-Claim (`resolveVapidSubject`, niemals `.local`), `TTL: 86400`/`urgency: 'high'`, PNG-Notification-Icons (`/icon-192.png`), automatische Abo-Erneuerung bei VAPID-Abweichung und ehrliche Push-Fehlerdiagnose auf `POST /api/push/test`.
+  - Echte opake PNG-/ICO-Icons (`apple-touch-icon.png`, `icon-192.png`, `icon-512.png`, `favicon-32x32.png`, `favicon.ico`) für iPhone Home-Screen & Safari-Favicon.
+  - Solide, nicht-geblurte obere Leiste in der iOS-Home-Screen-PWA (`apple-mobile-web-app-status-bar-style` = `black`/`default`, synchronisiertes `theme-color`, `.lp-header-bar` ohne `backdrop-filter`).
+  - Umschaltbares **Kompakt**-Layout in Übersicht & Sensoren (2-spaltig auf iPhone, bis zu 5-spaltig am Desktop) sowie vollständige Entfernung von OpenTopoMap (nur noch OpenStreetMap).
+
 ## 2. Nächste Schritte
-- [ ] Optional auf Wunsch: `v0.0.2` nach `https://github.com/LouisOverhoff/LoRaPulse` pushen und `lorapulse.overhoff.it` per `git pull && docker compose up -d --build` aktualisieren.
-- [ ] Nach dem Update auf `lorapulse.overhoff.it`: Stalwart-SMTP-Zugangsdaten unter *Verwaltung -> TTN, E-Mail & System* eintragen und Web-Push am Handy & Laptop aktivieren.
+- [ ] Hotfix auf `main` & Tag `v0.0.2` nach GitHub pushen und `lorapulse.overhoff.it` per `git pull && docker compose up -d --build` aktualisieren.
+- [ ] Auf dem iPhone: Altes Home-Screen-Icon einmal löschen & neu hinzufügen (für neues PNG-Icon & klare obere Leiste) und anschließend in der App unter *Verwaltung -> Profil & Benachrichtigungen* Push aktivieren & per Test-Push prüfen.

@@ -3,7 +3,6 @@ import L from 'leaflet';
 import {
   Crosshair,
   ExternalLink,
-  Layers,
   LocateFixed,
   MapPinOff,
   SlidersHorizontal,
@@ -123,11 +122,9 @@ export function MapView({
   const nowMs = useNowTick(10000);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
-  const baseLayerRef = useRef<L.TileLayer | null>(null);
   const markerGroupRef = useRef<L.LayerGroup | null>(null);
   const fittedKeyRef = useRef<string>('');
 
-  const [layerType, setLayerType] = useState<'osm' | 'topo'>('osm');
   const [filterMode, setFilterMode] = useState<'all' | 'alarms'>('all');
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [pickModeForId, setPickModeForId] = useState<string | null>(null);
@@ -172,6 +169,13 @@ export function MapView({
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
+    // OpenStreetMap tile layer (OSM Tile Policy compliant)
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a>',
+    }).addTo(map);
+
     const markerGroup = L.layerGroup().addTo(map);
     mapRef.current = map;
     markerGroupRef.current = markerGroup;
@@ -185,36 +189,9 @@ export function MapView({
       ro.disconnect();
       map.remove();
       mapRef.current = null;
-      baseLayerRef.current = null;
       markerGroupRef.current = null;
     };
   }, []);
-
-  // Switch OSM / OpenTopoMap tile layer (OSM Tile Policy compliant)
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    if (baseLayerRef.current) {
-      map.removeLayer(baseLayerRef.current);
-    }
-
-    const tileLayer =
-      layerType === 'topo'
-        ? L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
-            maxZoom: 17,
-            attribution:
-              '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a>, SRTM | &copy; <a href="https://opentopomap.org" target="_blank" rel="noreferrer">OpenTopoMap</a> (CC-BY-SA)',
-          })
-        : L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19,
-            attribution:
-              '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a>',
-          });
-
-    tileLayer.addTo(map);
-    baseLayerRef.current = tileLayer;
-  }, [layerType]);
 
   // Handle click-to-place coordinates mode
   useEffect(() => {
@@ -368,36 +345,8 @@ export function MapView({
       {/* Map Controls Toolbar */}
       <div className="lp-surface rounded-xl p-3 flex flex-wrap items-center justify-between gap-2.5">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--text-secondary)] mr-1">
-            <Layers className="w-3.5 h-3.5 text-[var(--accent)]" strokeWidth={1.85} />
-          </span>
-          <button
-            type="button"
-            onClick={() => setLayerType('osm')}
-            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-              layerType === 'osm'
-                ? 'bg-[var(--accent-soft)] text-[var(--accent)] border-[var(--accent-border)]'
-                : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[var(--border-subtle)]'
-            }`}
-          >
-            {t(lang, 'mapLayerOsm')}
-          </button>
-          <button
-            type="button"
-            onClick={() => setLayerType('topo')}
-            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-              layerType === 'topo'
-                ? 'bg-[var(--accent-soft)] text-[var(--accent)] border-[var(--accent-border)]'
-                : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[var(--border-subtle)]'
-            }`}
-          >
-            {t(lang, 'mapLayerTopo')}
-          </button>
-        </div>
-
-        <div className="flex items-center gap-1.5 flex-wrap">
           <SlidersHorizontal
-            className="w-3.5 h-3.5 text-[var(--text-muted)] mr-1"
+            className="w-3.5 h-3.5 text-[var(--accent)] mr-1"
             strokeWidth={1.85}
           />
           <button
@@ -423,6 +372,10 @@ export function MapView({
             {t(lang, 'mapFilterAlarms')}
           </button>
         </div>
+
+        <span className="text-[11px] text-[var(--text-muted)]">
+          {t(lang, 'mapLayerOsm')}
+        </span>
       </div>
 
       {/* Missing GPS Notice Bar + Admin Quick Placement */}

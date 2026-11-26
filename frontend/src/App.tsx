@@ -64,6 +64,10 @@ export function App() {
     return saved === 'light' ? 'light' : 'dark';
   });
 
+  const [compactMode, setCompactMode] = useState<boolean>(() => {
+    return localStorage.getItem('lorapulse_density') === 'compact';
+  });
+
   const [lang, setLang] = useState<Language>(() => {
     const saved = localStorage.getItem('lorapulse_lang');
     if (saved === 'en' || saved === 'de') return saved;
@@ -103,11 +107,27 @@ export function App() {
     kind: 'info' | 'error';
   } | null>(null);
 
-  // Sync theme & language attributes
+  // Sync theme, iOS status bar & theme-color meta tag (solid opaque bar, zero blur)
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('lorapulse_theme', theme);
+
+    const headerColor = theme === 'light' ? '#ffffff' : '#121b24';
+    const themeMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeMeta) {
+      themeMeta.setAttribute('content', headerColor);
+    }
+    const statusMeta = document.querySelector(
+      'meta[name="apple-mobile-web-app-status-bar-style"]'
+    );
+    if (statusMeta) {
+      statusMeta.setAttribute('content', theme === 'light' ? 'default' : 'black');
+    }
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem('lorapulse_density', compactMode ? 'compact' : 'standard');
+  }, [compactMode]);
 
   useEffect(() => {
     document.documentElement.setAttribute('lang', lang);
@@ -602,8 +622,8 @@ export function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 min-w-0 flex flex-col pb-20 md:pb-0">
-        {/* Top Header Bar */}
-        <header className="sticky top-0 z-30 lp-surface border-x-0 border-t-0 px-4 sm:px-6 py-3 pt-safe flex items-center justify-between gap-3">
+        {/* Top Header Bar (solid opaque, no iOS blur overlay) */}
+        <header className="sticky top-0 z-30 lp-header-bar px-4 sm:px-6 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <div className="md:hidden w-8 h-8 rounded-lg bg-[var(--accent-soft)] border border-[var(--accent-border)] flex items-center justify-center text-[var(--accent)] shrink-0">
               <Radio className="w-4 h-4" strokeWidth={2} />
@@ -692,7 +712,7 @@ export function App() {
         )}
 
         {/* Active View Container */}
-        <main className="flex-1 p-4 sm:p-5 max-w-7xl w-full mx-auto">
+        <main className="flex-1 p-3 sm:p-5 max-w-7xl w-full mx-auto">
           {activeTab === 'overview' && (
             <OverviewView
               devices={devices}
@@ -700,6 +720,8 @@ export function App() {
               profiles={profiles}
               user={user}
               lang={lang}
+              compactMode={compactMode}
+              onToggleCompactMode={setCompactMode}
               onSelectDevice={(d) => setSelectedDeviceId(d.id)}
               onAckAlert={handleAckAlert}
               onToggleFavorite={handleToggleFavorite}
@@ -723,6 +745,8 @@ export function App() {
               devices={devices}
               profiles={profiles}
               lang={lang}
+              compactMode={compactMode}
+              onToggleCompactMode={setCompactMode}
               onSelectDevice={(d) => setSelectedDeviceId(d.id)}
               onToggleFavorite={handleToggleFavorite}
             />

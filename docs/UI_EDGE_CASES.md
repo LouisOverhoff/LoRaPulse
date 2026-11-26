@@ -26,6 +26,6 @@ Diese Checkliste wird in **LoRaPulse** bei jeder Frontend- und API-Änderung gep
 ## 4. Visuelle Konsistenz, Mehrsprachigkeit (`DE`/`EN`) & Mobile / iOS PWA
 - **Striktes Emoji-Verbot (Zero-Emoji-UI):** Emojis rendern auf Windows, iOS und Android inkonsistent und wirken unruhig. Alle Zustände müssen durch einheitliche SVG-Icons (`stroke-width: 1.75–2`), Signal-/Batterie-Grafiken, Status-LEDs und klare Typografie dargestellt werden.
 - **Textlängen Deutsch vs. Englisch:** Deutsche Begriffe (z. B. *„Sendeintervall aktualisieren"*) sind oft ~30 % länger als englische – Buttons und Badges müssen auf 320px-Screens ohne Überlappung umbrechen oder kürzen.
-- **iOS Safari-Tab vs. Installierte PWA:** Vorab-Prüfung auf `standalone`-Modus vor Aktivierung von Web-Push inkl. verständlicher Anleitung.
-- **Safe-Area-Insets (iPhone Dynamic Island / Home-Bar):** Berücksichtigung von `env(safe-area-inset-*)` in Navigation und Vollbild-Karte.
+- **iOS Safari-Tab vs. Installierte PWA:** Vorab-Prüfung auf `standalone`-Modus vor Aktivierung von Web-Push, opake PNG-Icons (`apple-touch-icon.png` 180×180, `icon-192.png`, `icon-512.png`, `favicon-32x32.png`, `favicon.ico`) statt iOS-ignorierter SVGs, sowie solide nicht-geblurte Statusleiste (`black`/`default` + synchronisiertes `theme-color` statt `black-translucent`).
+- **Safe-Area-Insets (iPhone Dynamic Island / Home-Bar):** Berücksichtigung von `env(safe-area-inset-*)` in `.lp-header-bar`, Navigation und Vollbild-Karte.
 - **Schlechter Mobilfunk im Außeneinsatz:** Klare Fehler-/Offline-Anzeige und Schutz vor Doppel-Aktionen (Loading-Lock).

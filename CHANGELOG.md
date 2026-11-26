@@ -16,6 +16,13 @@ Alle relevanten Architektur-, Funktions- und Dokumentationsänderungen an **LoRa
   - *D – Favoriten & Alarm-Sortierung:* Anpinnen von Favoriten-Sensoren per Stern-Icon und automatische Priorisierung auf der Übersicht.
 - **Sensor-Profile löschen:** `DELETE /api/profiles/:id` für eigene Profile inkl. automatischem Fallback zugeordneter Sensoren auf `generic_json`.
 
+### Behoben & Verbessert (iOS-PWA & Layout-Hotfix in `0.0.2`)
+- **iPhone / iOS Web-Push (`web.push.apple.com`):** RFC-8292-/Apple-APNs-konformer VAPID-`sub`-Claim (`resolveVapidSubject`: niemals `.local`, stattdessen SMTP-Absender oder `https://<APP_DOMAIN>`), explizite `TTL`/`urgency`-Header, PNG-Notification-Icons (`/icon-192.png`), automatisches Erneuern veralteter Push-Abos bei VAPID-Key-Wechsel sowie ehrliche Fehlerdiagnose bei `POST /api/push/test`.
+- **iPhone Favicon & Home-Screen-Icon:** Echte opake PNG- & ICO-App-Icons generiert und eingebunden (`apple-touch-icon.png` 180×180, `icon-192.png`, `icon-512.png`, `favicon-32x32.png`, `favicon.ico`), da iOS Safari SVG-Touch-Icons ignoriert.
+- **Kein Blur mehr in der oberen iPhone-PWA-Leiste:** `apple-mobile-web-app-status-bar-style` von `black-translucent` auf solid `black`/`default` umgestellt, dynamische Synchronisation von `<meta name="theme-color">` mit Dark/Light Mode sowie opake `.lp-header-bar` ohne `backdrop-filter`.
+- **Kompaktes Layout für mehr Sensoren:** Umschaltbare Ansichtsdichte (**Standard** / **Kompakt**, lokal gespeichert) in Übersicht und Sensoren – inkl. kompakter 4-Spalten-KPI-Leiste und platzsparender 2- bis 5-spaltiger Sensorkacheln.
+- **OpenTopoMap entfernt:** Kartenansicht und Helmet-CSP auf **OpenStreetMap** fokussiert.
+
 ### Geändert & Verbessert
 - **Kompaktes Login- & Startseiten-Layout:** Vertikal zentrierte, zusammenhängende Login-/Setup-/Reset-Einheit ohne weite Leerflächen, dynamische Versionsanzeige (`v0.0.2`) mit klickbarem GitHub-Link sowie bündig gruppierte Messwerte auf den Sensorkacheln.
 - **Live-tickende Zeitstempel:** Fortlaufende Aktualisierung von *„Zuletzt aktualisiert"* inkl. Uhrzeit ohne Neuladen der Seite.

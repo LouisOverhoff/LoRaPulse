@@ -7,7 +7,7 @@
 LoRaPulse ist als modulares TypeScript-Monorepo aufgebaut:
 - `packages/shared`: Gemeinsame Typen (`v0.0.2`), Zod-Schemas, lokalisierte Standard-Sensorprofile (`Dragino DS03A-LB`, `Dragino D20-LB`, `Wetterstation`, `Generischer Sensor`), Li-SOCl₂-Batteriebewertung, binäre Fallback-Decoder und TDC-Downlink-Encoder.
 - `backend`: Fastify-Server, Dual-Driver PostgreSQL (`pg.Pool` + `@electric-sql/pglite`), `Argon2id`-Auth, `AES-256-GCM`-Schlüsselspeicher, `TtnMqttManager`, `NotificationDispatcher` (`web-push` VAPID + `nodemailer` SMTP), `OfflineWatchdog` und berechtigungsgefilterter SSE-Live-Hub.
-- `frontend`: React 19 + Vite PWA (`injectManifest` Service Worker `src/sw.ts`) + Tailwind CSS v4 + `lucide-react` (strikte Zero-Emoji-Policy) + Leaflet (`OpenStreetMap` / `OpenTopoMap`) + 100 % sprachreine `DE`/`EN`-Lokalisierung + Live-Zeitstempel-Ticker (`useNowTick`).
+- `frontend`: React 19 + Vite PWA (`injectManifest` Service Worker `src/sw.ts`, opake PNG-/ICO-Icons für iOS Safari & Manifest, nicht-transparenter iOS-Header, umschaltbare **Standard/Kompakt**-Ansicht) + Tailwind CSS v4 + `lucide-react` (strikte Zero-Emoji-Policy) + Leaflet (**OpenStreetMap**) + 100 % sprachreine `DE`/`EN`-Lokalisierung + Live-Zeitstempel-Ticker (`useNowTick`).
 - `simulator`: Eigenständiger TTN-v3-kompatibler MQTT-Broker (`aedes`) inkl. Class-A-RX1-Downlink-Simulation.
 
 ---

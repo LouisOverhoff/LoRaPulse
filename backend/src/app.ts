@@ -252,7 +252,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     await db.close();
   });
 
-  // Security headers (allowing Leaflet OpenStreetMap & OpenTopoMap tiles)
+  // Security headers (allowing Leaflet OpenStreetMap tiles)
   await app.register(fastifyHelmet, {
     crossOriginEmbedderPolicy: false,
     contentSecurityPolicy: {
@@ -266,7 +266,6 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
           'blob:',
           'https://*.tile.openstreetmap.org',
           'https://tile.openstreetmap.org',
-          'https://*.tile.opentopomap.org',
         ],
         connectSrc: ["'self'"],
         fontSrc: ["'self'", 'data:'],
@@ -1693,8 +1692,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     const authUser = requireAuth(request, reply);
     if (!authUser) return;
 
-    const sentCount = await notifications.sendTestPush(authUser);
-    return { sentCount };
+    const requestOrigin = request.hostname ? `${request.protocol}://${request.hostname}` : undefined;
+    const result = await notifications.sendTestPush(authUser, requestOrigin);
+    return result;
   });
 
   // =========================================================================

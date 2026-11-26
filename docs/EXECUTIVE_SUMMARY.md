@@ -12,7 +12,7 @@
 - **SMTP-Integration & Self-Service Passwort-Reset:** Sichere Anbindung eines eigenen Mailservers (z. B. Stalwart) für eigenständiges Zurücksetzen vergessener Passwörter, Einladungs-Mails und optionale Sensor-Alarm-Mails.
 - **Persönliche Entscheidungsfreiheit pro Sensor:** Jeder Benutzer steuert je Sensor individuell seine Benachrichtigungskanäle (Standard: **Push aktiviert**, **E-Mail deaktiviert**) sowie Favoriten-Markierungen.
 - **Proaktive Betriebssicherheit (Ideen A–D):** Hintergrund-Offline-Watchdog, automatische Alarm-Entwarnung (`RESOLVED`), temporärer Wartungsmodus gegen Fehlalarme bei Arbeiten vor Ort und priorisierte Alarm-/Favoriten-Sortierung.
-- **Polierte UX & 100 % Sprachreinheit:** Kompakt zentrierte Login-Maske mit dynamischer Versions- & GitHub-Verlinkung, bündige Messwert-Anordnung, ohne Reload mitlaufende Zeitstempel, Löschfunktion für eigene Sensor-Profile und vollständige Bereinigung sämtlicher englischer Restbegriffe in der deutschen Ansicht (`0 Emojis`).
+- **Polierte UX, iOS-PWA-Feinschliff & 100 % Sprachreinheit:** Kompakt zentrierte Login-Maske mit dynamischer Versions- & GitHub-Verlinkung, bündige Messwert-Anordnung, umschaltbare **Kompakt-Ansicht** für mehr Sensoren auf einen Blick, ohne Reload mitlaufende Zeitstempel, Apple-APNs-konformes iPhone Web-Push, echte PNG/ICO-Favicons & `apple-touch-icon.png`, klare nicht-geblurte iOS-PWA-Titelleiste, fokussierte OpenStreetMap-Karte (ohne OpenTopoMap), Löschfunktion für eigene Sensor-Profile und `0 Emojis`.
 
 ## 2. Qualitäts- & Teststatus
 - Alle 4 Workspace-Pakete bestehen `npm run typecheck` und `npm run build` mit **0 Fehlern**.

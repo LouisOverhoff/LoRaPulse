@@ -16,7 +16,7 @@ Lizenz: **MIT** · Sprachen: **100 % Deutsch (`de`) & Englisch (`en`)** · Deplo
   - **Aktiver Offline-Watchdog:** Erkennt überfällige Sensoren (> 3× Meldeintervall) automatisch im Hintergrund.
   - **Automatische Entwarnung (`RESOLVED`):** Schließt Alarme selbstständig, sobald Kontakte schließen, Messwerte in den Normalbereich zurückkehren oder überfällige Sensoren wieder funken.
   - **Wartungsmodus / Schlummern:** Pausiert Fehlalarme für 1 h / 4 h / 24 h bei Arbeiten vor Ort am Sensor.
-- **Granulares RBAC (`Zero-Sibling-Leak`) & OpenStreetMap:** Optionale Kategorien, optionale Gruppen und Einzel-Sensor-Freigaben sowie interaktive **OpenStreetMap / OpenTopoMap**-Karte und visueller **JSON-Feld-Mapper** (inkl. Löschen eigener Profile).
+- **Granulares RBAC (`Zero-Sibling-Leak`) & OpenStreetMap:** Optionale Kategorien, optionale Gruppen und Einzel-Sensor-Freigaben sowie interaktive **OpenStreetMap**-Karte, umschaltbare **Kompakt-Ansicht** für viele Sensoren auf einen Blick und visueller **JSON-Feld-Mapper** (inkl. Löschen eigener Profile).
 - **Class-A LoRaWAN Downlinks (exklusiv `SUPER_ADMIN`):** Sendeintervall über `.../down/replace` anpassen – inklusive RX1/RX2-Statusverfolgung (`QUEUED` -> `SENT`).
 
 ---

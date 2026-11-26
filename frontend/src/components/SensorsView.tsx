@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react';
 import {
   Folder,
   FolderTree,
+  Grid2x2,
   Inbox,
+  LayoutGrid,
   Link2,
   List,
   Lock,
@@ -22,15 +24,22 @@ export function SensorsView({
   devices,
   profiles,
   lang,
+  compactMode = false,
+  onToggleCompactMode,
   onSelectDevice,
   onToggleFavorite,
 }: {
   devices: DeviceView[];
   profiles: SensorProfile[];
   lang: Language;
+  compactMode?: boolean;
+  onToggleCompactMode?: (compact: boolean) => void;
   onSelectDevice: (device: DeviceView) => void;
   onToggleFavorite: (device: DeviceView) => void;
 }) {
+  const gridClass = compactMode
+    ? 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2'
+    : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5';
   const [query, setQuery] = useState('');
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
   const [statusFilter, setStatusFilter] = useState<'ALL' | DeviceHealthStatus>('ALL');
@@ -152,6 +161,35 @@ export function SensorsView({
               {t(lang, 'viewFlatList')}
             </button>
           </div>
+
+          {onToggleCompactMode && (
+            <div className="inline-flex rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-0.5">
+              <button
+                type="button"
+                onClick={() => onToggleCompactMode(false)}
+                className={`inline-flex items-center gap-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors cursor-pointer ${
+                  !compactMode
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" strokeWidth={1.85} />
+                {t(lang, 'layoutStandard')}
+              </button>
+              <button
+                type="button"
+                onClick={() => onToggleCompactMode(true)}
+                className={`inline-flex items-center gap-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors cursor-pointer ${
+                  compactMode
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <Grid2x2 className="w-3.5 h-3.5" strokeWidth={1.85} />
+                {t(lang, 'layoutCompact')}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -160,13 +198,14 @@ export function SensorsView({
           {t(lang, 'noMatchingSensors')}
         </div>
       ) : viewMode === 'flat' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
+        <div className={gridClass}>
           {filtered.map((dev) => (
             <DeviceCard
               key={dev.id}
               device={dev}
               profile={resolveProfile(dev.sensorProfileId, profiles)}
               lang={lang}
+              compact={compactMode}
               onClick={() => onSelectDevice(dev)}
               onToggleFavorite={onToggleFavorite}
             />
@@ -190,13 +229,14 @@ export function SensorsView({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
+              <div className={gridClass}>
                 {items.map((dev) => (
                   <DeviceCard
                     key={dev.id}
                     device={dev}
                     profile={resolveProfile(dev.sensorProfileId, profiles)}
                     lang={lang}
+                    compact={compactMode}
                     onClick={() => onSelectDevice(dev)}
                     onToggleFavorite={onToggleFavorite}
                   />
@@ -225,13 +265,14 @@ export function SensorsView({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
+              <div className={gridClass}>
                 {groupedSections.directShares.map((dev) => (
                   <DeviceCard
                     key={dev.id}
                     device={dev}
                     profile={resolveProfile(dev.sensorProfileId, profiles)}
                     lang={lang}
+                    compact={compactMode}
                     onClick={() => onSelectDevice(dev)}
                     onToggleFavorite={onToggleFavorite}
                   />
@@ -260,13 +301,14 @@ export function SensorsView({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
+              <div className={gridClass}>
                 {groupedSections.uncategorized.map((dev) => (
                   <DeviceCard
                     key={dev.id}
                     device={dev}
                     profile={resolveProfile(dev.sensorProfileId, profiles)}
                     lang={lang}
+                    compact={compactMode}
                     onClick={() => onSelectDevice(dev)}
                     onToggleFavorite={onToggleFavorite}
                   />

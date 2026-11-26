@@ -6,6 +6,8 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Grid2x2,
+  LayoutGrid,
   Lock,
   MapPin,
   Radio,
@@ -38,6 +40,8 @@ export function OverviewView({
   profiles,
   user,
   lang,
+  compactMode = false,
+  onToggleCompactMode,
   onSelectDevice,
   onAckAlert,
   onToggleFavorite,
@@ -47,6 +51,8 @@ export function OverviewView({
   profiles: SensorProfile[];
   user: UserSummary;
   lang: Language;
+  compactMode?: boolean;
+  onToggleCompactMode?: (compact: boolean) => void;
   onSelectDevice: (device: DeviceView) => void;
   onAckAlert: (alertId: string) => Promise<void>;
   onToggleFavorite: (device: DeviceView) => void;
@@ -103,87 +109,133 @@ export function OverviewView({
   }
 
   return (
-    <div className="space-y-4">
-      {/* Compact Cohesive KPI Status Bar */}
-      <section className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3">
-        <div className="lp-surface rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2.5">
-          <div>
-            <div className="text-[11px] text-[var(--text-secondary)]">
+    <div className={compactMode ? 'space-y-3' : 'space-y-4'}>
+      {/* Cohesive KPI Status Bar (ultra-slim in compact mode for maximum sensor count on screen) */}
+      {compactMode ? (
+        <section className="grid grid-cols-4 gap-1.5 sm:gap-2">
+          <div className="lp-surface rounded-lg px-2.5 py-1.5">
+            <div className="text-[10px] text-[var(--text-muted)] truncate">
               {t(lang, 'kpiVisibleSensors')}
             </div>
-            <div className="text-xl font-bold leading-tight mt-0.5">{devices.length}</div>
+            <div className="text-base font-bold leading-tight">{devices.length}</div>
           </div>
-          <div className="w-9 h-9 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
-            <Radio className="w-4 h-4" strokeWidth={1.9} />
-          </div>
-        </div>
-
-        <div className="lp-surface rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2.5">
-          <div>
-            <div className="text-[11px] text-[var(--text-secondary)]">
+          <div className="lp-surface rounded-lg px-2.5 py-1.5">
+            <div className="text-[10px] text-[var(--text-muted)] truncate">
               {t(lang, 'kpiOpenAlerts')}
             </div>
             <div
-              className={`text-xl font-bold leading-tight mt-0.5 ${
+              className={`text-base font-bold leading-tight ${
                 openAlerts.length > 0 ? 'text-red-500' : ''
               }`}
             >
               {openAlerts.length}
             </div>
           </div>
-          <div
-            className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-              openAlerts.length > 0
-                ? 'bg-red-500/15 text-red-500'
-                : 'bg-slate-500/12 text-[var(--text-muted)]'
-            }`}
-          >
-            <BellRing className="w-4 h-4" strokeWidth={1.9} />
-          </div>
-        </div>
-
-        <div className="lp-surface rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2.5">
-          <div>
-            <div className="text-[11px] text-[var(--text-secondary)]">
+          <div className="lp-surface rounded-lg px-2.5 py-1.5">
+            <div className="text-[10px] text-[var(--text-muted)] truncate">
               {t(lang, 'kpiWarningsBattery')}
             </div>
             <div
-              className={`text-xl font-bold leading-tight mt-0.5 ${
+              className={`text-base font-bold leading-tight ${
                 warnOrLowBatCount > 0 ? 'text-amber-500' : ''
               }`}
             >
               {warnOrLowBatCount}
             </div>
           </div>
-          <div
-            className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-              warnOrLowBatCount > 0
-                ? 'bg-amber-500/15 text-amber-500'
-                : 'bg-slate-500/12 text-[var(--text-muted)]'
-            }`}
-          >
-            <BatteryWarning className="w-4 h-4" strokeWidth={1.9} />
-          </div>
-        </div>
-
-        <div className="lp-surface rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2.5">
-          <div>
-            <div className="text-[11px] text-[var(--text-secondary)]">
+          <div className="lp-surface rounded-lg px-2.5 py-1.5">
+            <div className="text-[10px] text-[var(--text-muted)] truncate">
               {t(lang, 'kpiGeoreferenced')}
             </div>
-            <div className="text-xl font-bold leading-tight mt-0.5">
+            <div className="text-base font-bold leading-tight">
               {geoCount}
-              <span className="text-xs font-normal text-[var(--text-muted)]">
-                {' '}
-                / {devices.length}
+              <span className="text-[10px] font-normal text-[var(--text-muted)]">
+                /{devices.length}
               </span>
             </div>
           </div>
-          <div className="w-9 h-9 rounded-lg bg-sky-500/12 text-sky-400 flex items-center justify-center shrink-0">
-            <MapPin className="w-4 h-4" strokeWidth={1.9} />
+        </section>
+      ) : (
+        <section className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3">
+          <div className="lp-surface rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2.5">
+            <div>
+              <div className="text-[11px] text-[var(--text-secondary)]">
+                {t(lang, 'kpiVisibleSensors')}
+              </div>
+              <div className="text-xl font-bold leading-tight mt-0.5">{devices.length}</div>
+            </div>
+            <div className="w-9 h-9 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
+              <Radio className="w-4 h-4" strokeWidth={1.9} />
+            </div>
           </div>
-        </div>
-      </section>
+
+          <div className="lp-surface rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2.5">
+            <div>
+              <div className="text-[11px] text-[var(--text-secondary)]">
+                {t(lang, 'kpiOpenAlerts')}
+              </div>
+              <div
+                className={`text-xl font-bold leading-tight mt-0.5 ${
+                  openAlerts.length > 0 ? 'text-red-500' : ''
+                }`}
+              >
+                {openAlerts.length}
+              </div>
+            </div>
+            <div
+              className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                openAlerts.length > 0
+                  ? 'bg-red-500/15 text-red-500'
+                  : 'bg-slate-500/12 text-[var(--text-muted)]'
+              }`}
+            >
+              <BellRing className="w-4 h-4" strokeWidth={1.9} />
+            </div>
+          </div>
+
+          <div className="lp-surface rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2.5">
+            <div>
+              <div className="text-[11px] text-[var(--text-secondary)]">
+                {t(lang, 'kpiWarningsBattery')}
+              </div>
+              <div
+                className={`text-xl font-bold leading-tight mt-0.5 ${
+                  warnOrLowBatCount > 0 ? 'text-amber-500' : ''
+                }`}
+              >
+                {warnOrLowBatCount}
+              </div>
+            </div>
+            <div
+              className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                warnOrLowBatCount > 0
+                  ? 'bg-amber-500/15 text-amber-500'
+                  : 'bg-slate-500/12 text-[var(--text-muted)]'
+              }`}
+            >
+              <BatteryWarning className="w-4 h-4" strokeWidth={1.9} />
+            </div>
+          </div>
+
+          <div className="lp-surface rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-2.5">
+            <div>
+              <div className="text-[11px] text-[var(--text-secondary)]">
+                {t(lang, 'kpiGeoreferenced')}
+              </div>
+              <div className="text-xl font-bold leading-tight mt-0.5">
+                {geoCount}
+                <span className="text-xs font-normal text-[var(--text-muted)]">
+                  {' '}
+                  / {devices.length}
+                </span>
+              </div>
+            </div>
+            <div className="w-9 h-9 rounded-lg bg-sky-500/12 text-sky-400 flex items-center justify-center shrink-0">
+              <MapPin className="w-4 h-4" strokeWidth={1.9} />
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Active Open Alerts + Collapsible Auto-Resolved Alerts (Idea B) */}
       {(openAlerts.length > 0 || resolvedAlerts.length > 0) && (
@@ -339,22 +391,60 @@ export function OverviewView({
       ) : (
         <section className="space-y-2.5">
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <h2 className="text-sm font-bold tracking-tight">
-              {t(lang, 'allSensorsSection')}
-            </h2>
-            <span className="text-[11px] text-[var(--text-muted)]">
-              {t(lang, 'overviewSortHint')} ·{' '}
-              {t(lang, 'sensorsCountBadge', { n: sortedDevices.length })}
-            </span>
+            <div className="flex items-center gap-2 min-w-0">
+              <h2 className="text-sm font-bold tracking-tight">
+                {t(lang, 'allSensorsSection')}
+              </h2>
+              <span className="text-[11px] text-[var(--text-muted)] hidden sm:inline">
+                {t(lang, 'overviewSortHint')} ·{' '}
+                {t(lang, 'sensorsCountBadge', { n: sortedDevices.length })}
+              </span>
+            </div>
+
+            {onToggleCompactMode && (
+              <div className="inline-flex rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-0.5">
+                <button
+                  type="button"
+                  onClick={() => onToggleCompactMode(false)}
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer ${
+                    !compactMode
+                      ? 'bg-[var(--accent)] text-white'
+                      : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <LayoutGrid className="w-3 h-3" strokeWidth={1.9} />
+                  {t(lang, 'layoutStandard')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onToggleCompactMode(true)}
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer ${
+                    compactMode
+                      ? 'bg-[var(--accent)] text-white'
+                      : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <Grid2x2 className="w-3 h-3" strokeWidth={1.9} />
+                  {t(lang, 'layoutCompact')}
+                </button>
+              </div>
+            )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
+          <div
+            className={
+              compactMode
+                ? 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2'
+                : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5'
+            }
+          >
             {sortedDevices.map((device) => (
               <DeviceCard
                 key={device.id}
                 device={device}
                 profile={resolveProfile(device.sensorProfileId, profiles)}
                 lang={lang}
+                compact={compactMode}
                 onClick={() => onSelectDevice(device)}
                 onToggleFavorite={onToggleFavorite}
               />

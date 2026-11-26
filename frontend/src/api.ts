@@ -279,11 +279,25 @@ export const api = {
     });
   },
 
-  async sendTestPush(): Promise<void> {
-    await requestJson<unknown>('/api/push/test', {
+  async sendTestPush(): Promise<{
+    sentCount: number;
+    failedCount: number;
+    removedCount: number;
+    lastError: string | null;
+  }> {
+    const raw = await requestJson<unknown>('/api/push/test', {
       method: 'POST',
       body: JSON.stringify({}),
     });
+    if (isRecord(raw)) {
+      return {
+        sentCount: typeof raw.sentCount === 'number' ? raw.sentCount : 0,
+        failedCount: typeof raw.failedCount === 'number' ? raw.failedCount : 0,
+        removedCount: typeof raw.removedCount === 'number' ? raw.removedCount : 0,
+        lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
+      };
+    }
+    return { sentCount: 0, failedCount: 0, removedCount: 0, lastError: null };
   },
 
   // Devices, Preferences, Maintenance, Measurements, Export & Downlinks

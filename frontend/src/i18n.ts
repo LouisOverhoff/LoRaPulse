@@ -106,6 +106,8 @@ export const TRANSLATIONS = {
       'Ihrem Benutzerkonto wurden noch keine Sensoren, Kategorien oder Gruppen zugeordnet. Wenden Sie sich an einen Administrator, um Zugriffsrechte zu erhalten.',
     allSensorsSection: 'Überwachte Sensoren',
     overviewSortHint: 'Sortiert nach Alarmen, Favoriten & Status',
+    layoutStandard: 'Standard',
+    layoutCompact: 'Kompakt',
 
     // Telemetry, Favorites, Notifications & Maintenance
     statusOk: 'Normal',
@@ -152,8 +154,7 @@ export const TRANSLATIONS = {
     prefSavedSuccess: 'Persönliche Sensoreinstellung gespeichert.',
 
     // Map View
-    mapLayerOsm: 'Straßenkarte (OSM)',
-    mapLayerTopo: 'Topografie (OpenTopoMap)',
+    mapLayerOsm: 'Straßenkarte (OpenStreetMap)',
     mapFilterAll: 'Alle Standorte',
     mapFilterAlarms: 'Nur Alarme / Warnungen',
     mapZeroGpsBanner: 'Noch keine Sensoren mit hinterlegten GPS-Koordinaten im aktuellen Filter.',
@@ -261,6 +262,11 @@ export const TRANSLATIONS = {
     pushTestBtn: 'Test-Push an meine Geräte senden',
     pushTesting: 'Sende Test…',
     pushTestSentSuccess: 'Test-Benachrichtigung wurde an Ihre registrierten Geräte gesendet.',
+    pushTestPartialSuccess:
+      'Test-Push teilweise zugestellt ({sent} erfolgreich, {failed} fehlgeschlagen).',
+    pushTestFailedDetail: 'Push-Zustellung fehlgeschlagen ({detail}).',
+    pushTestNoActiveDevices:
+      'Kein aktives Push-Gerät erreichbar. Bitte aktivieren Sie dieses Gerät erneut für Push.',
     pushRegisteredSuccess: 'Dieses Gerät empfängt ab sofort Push-Benachrichtigungen.',
     pushRemovedSuccess: 'Push-Gerät wurde entfernt.',
     pushPermissionDenied:
@@ -503,6 +509,8 @@ export const TRANSLATIONS = {
       'Your account has not yet been assigned to any sensors, categories, or groups. Please contact an administrator to request access.',
     allSensorsSection: 'Monitored Sensors',
     overviewSortHint: 'Sorted by alarms, favorites & status',
+    layoutStandard: 'Standard',
+    layoutCompact: 'Compact',
 
     // Telemetry, Favorites, Notifications & Maintenance
     statusOk: 'Healthy',
@@ -549,8 +557,7 @@ export const TRANSLATIONS = {
     prefSavedSuccess: 'Personal sensor preference saved.',
 
     // Map View
-    mapLayerOsm: 'Street Map (OSM)',
-    mapLayerTopo: 'Topographic (OpenTopoMap)',
+    mapLayerOsm: 'Street Map (OpenStreetMap)',
     mapFilterAll: 'All Locations',
     mapFilterAlarms: 'Alarms & Warnings Only',
     mapZeroGpsBanner: 'No sensors with GPS coordinates match the current filter.',
@@ -656,6 +663,11 @@ export const TRANSLATIONS = {
     pushTestBtn: 'Send Test Push to My Devices',
     pushTesting: 'Sending…',
     pushTestSentSuccess: 'Test push notification sent to your registered devices.',
+    pushTestPartialSuccess:
+      'Test push partially delivered ({sent} delivered, {failed} failed).',
+    pushTestFailedDetail: 'Push delivery failed ({detail}).',
+    pushTestNoActiveDevices:
+      'No active push device reachable. Please re-enable push on this device.',
     pushRegisteredSuccess: 'Push notifications are now active on this device.',
     pushRemovedSuccess: 'Push device removed.',
     pushPermissionDenied:

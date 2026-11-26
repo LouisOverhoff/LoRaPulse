@@ -35,19 +35,23 @@ export function DeviceCard({
   device,
   profile,
   lang,
+  compact = false,
   onClick,
   onToggleFavorite,
 }: {
   device: DeviceView;
   profile: SensorProfile;
   lang: Language;
+  compact?: boolean;
   onClick?: () => void;
   onToggleFavorite?: (device: DeviceView) => void;
 }) {
   const nowMs = useNowTick(10000);
   const readings = formatDeviceReadings(device, profile, lang);
   const primaryReading = readings.find((r) => r.isPrimary) ?? readings[0] ?? null;
-  const secondaryReadings = readings.filter((r) => r !== primaryReading).slice(0, 4);
+  const secondaryReadings = readings
+    .filter((r) => r !== primaryReading)
+    .slice(0, compact ? 2 : 4);
 
   const hasAnyPacket =
     Boolean(device.lastSeenAt) || Object.keys(device.latestValues ?? {}).length > 0;
@@ -64,6 +68,162 @@ export function DeviceCard({
     OFFLINE: 'border-l-slate-500',
     NEW: 'border-l-sky-400',
   };
+
+  const dotColor: Record<DeviceView['status'], string> = {
+    OK: 'bg-emerald-500',
+    ALARM: 'bg-red-500 lp-led-pulse',
+    WARN: 'bg-amber-500',
+    OFFLINE: 'bg-slate-400',
+    NEW: 'bg-sky-400',
+  };
+
+  if (compact) {
+    return (
+      <article
+        onClick={onClick}
+        role={onClick ? 'button' : undefined}
+        tabIndex={onClick ? 0 : undefined}
+        onKeyDown={
+          onClick
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onClick();
+                }
+              }
+            : undefined
+        }
+        className={`lp-surface rounded-lg border-l-[3px] ${
+          edgeColor[device.status] ?? 'border-l-slate-500'
+        } p-2.5 flex flex-col justify-between gap-1.5 transition-colors ${
+          onClick ? 'cursor-pointer hover:border-[var(--border-strong)]' : ''
+        } ${device.status === 'OFFLINE' ? 'opacity-85' : ''}`}
+      >
+        {/* Compact Header: Status LED + Sensor Name + Favorite Star */}
+        <div className="flex items-center justify-between gap-1.5 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                dotColor[device.status] ?? 'bg-slate-400'
+              }`}
+            />
+            <h3 className="font-semibold text-xs text-[var(--text-primary)] truncate">
+              {device.name}
+            </h3>
+          </div>
+
+          <div className="flex items-center gap-0.5 shrink-0">
+            {inMaintenance && (
+              <span
+                title={t(lang, 'maintenanceUntilBadge', {
+                  time: formatMaintenanceUntil(device.maintenanceUntil, lang, nowMs),
+                })}
+                className="text-amber-500"
+              >
+                <Wrench className="w-3 h-3" strokeWidth={1.9} />
+              </span>
+            )}
+            {onToggleFavorite ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFavorite(device);
+                }}
+                title={
+                  pref.isFavorite
+                    ? t(lang, 'favoriteUnpinTitle')
+                    : t(lang, 'favoritePinTitle')
+                }
+                aria-label={
+                  pref.isFavorite
+                    ? t(lang, 'favoriteUnpinTitle')
+                    : t(lang, 'favoritePinTitle')
+                }
+                className={`p-0.5 rounded transition-colors cursor-pointer ${
+                  pref.isFavorite
+                    ? 'text-amber-400 hover:bg-amber-500/12'
+                    : 'text-[var(--text-muted)] hover:text-amber-400'
+                }`}
+              >
+                <Star
+                  className={`w-3 h-3 ${pref.isFavorite ? 'fill-amber-400' : ''}`}
+                  strokeWidth={1.9}
+                />
+              </button>
+            ) : (
+              pref.isFavorite && (
+                <Star className="w-3 h-3 text-amber-400 fill-amber-400" strokeWidth={1.9} />
+              )
+            )}
+          </div>
+        </div>
+
+        {/* Compact Primary + Secondary Readings */}
+        <div className="lp-elevated rounded-md px-2 py-1.5">
+          {!hasAnyPacket ? (
+            <div className="text-[11px] text-[var(--text-muted)] truncate">
+              {t(lang, 'waitingFirstPacket')}
+            </div>
+          ) : primaryReading ? (
+            <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+              <span
+                className={`text-base font-bold leading-tight tracking-tight ${
+                  primaryReading.isProbeError
+                    ? 'text-amber-500'
+                    : primaryReading.isContactOpen === true
+                      ? 'text-red-500'
+                      : primaryReading.isContactOpen === false
+                        ? 'text-emerald-500'
+                        : 'text-[var(--text-primary)]'
+                }`}
+              >
+                {primaryReading.displayValue}
+              </span>
+              {secondaryReadings.map((sec) => (
+                <span
+                  key={sec.key}
+                  title={sec.label}
+                  className={`text-[11px] font-mono ${
+                    sec.isProbeError ? 'text-amber-500' : 'text-[var(--text-secondary)]'
+                  }`}
+                >
+                  {sec.displayValue}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xs text-[var(--text-muted)]">--</div>
+          )}
+        </div>
+
+        {/* Compact Footer: Live Timestamp + Battery Voltage / Status Flag */}
+        <div className="flex items-center justify-between gap-1.5 text-[10px] text-[var(--text-muted)] font-mono pt-0.5">
+          <span className="truncate">
+            {formatLiveTimestamp(device.lastSeenAt, lang, nowMs)}
+          </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {hasProbeError && (
+              <AlertTriangle className="w-3 h-3 text-amber-500" strokeWidth={2} />
+            )}
+            {device.batteryVoltage !== null && (
+              <span
+                className={
+                  device.batteryState === 'CRITICAL'
+                    ? 'text-red-500 font-semibold'
+                    : device.batteryState === 'LOW'
+                      ? 'text-amber-500 font-semibold'
+                      : ''
+                }
+              >
+                {device.batteryVoltage.toFixed(2)}V
+              </span>
+            )}
+          </div>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <article
